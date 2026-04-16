@@ -579,9 +579,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var monitor: LockInMonitor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // No dock icon
         NSApp.setActivationPolicy(.accessory)
-
         monitor = LockInMonitor()
         Task {
             await monitor?.start()
@@ -589,13 +587,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-// Bootstrap — @MainActor ensures this runs on the main actor
-@MainActor
-func launchApp() {
-    let app = NSApplication.shared
-    let delegate = AppDelegate()
-    app.delegate = delegate
-    app.run()
+@main
+struct LockInApp {
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.run()
+    }
 }
-
-launchApp()
