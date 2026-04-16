@@ -2,40 +2,54 @@ import Foundation
 import AppKit
 
 // ─────────────────────────────────────────────
-// MARK: - Config
+// MARK: - Persistent Settings
+// Stored in ~/.lockin/config, editable via Settings window
 // ─────────────────────────────────────────────
 
-struct Config {
-    // Priority: 1) env var  2) ~/.lockin/config  3) hardcoded fallback
-    static var apiKey: String = {
-        // Check env var first
-        if let k = ProcessInfo.processInfo.environment["LOCKIN_API_KEY"], !k.isEmpty { return k }
-        // Fall back to config file: ~/.lockin/config (KEY=VALUE format)
-        let configPath = (NSHomeDirectory() as NSString).appendingPathComponent(".lockin/config")
+class Settings: ObservableObject {
+    static let shared = Settings()
+    private let configPath = (NSHomeDirectory() as NSString).appendingPathComponent(".lockin/config")
+
+    var apiKey: String        { get { val("LOCKIN_API_KEY") ?? "" }        set { set("LOCKIN_API_KEY", newValue) } }
+    var pollInterval: Double  { get { Double(val("POLL_INTERVAL") ?? "") ?? 150 } set { set("POLL_INTERVAL", String(Int(newValue))) } }
+    var threshold: Int        { get { Int(val("THRESHOLD") ?? "") ?? 2 }   set { set("THRESHOLD", String(newValue)) } }
+    var logPath: String       { (NSHomeDirectory() as NSString).appendingPathComponent("Library/Logs/LockIn/procrastination.log") }
+
+    private var cache: [String: String] = [:]
+
+    init() { reload() }
+
+    func reload() {
+        cache = [:]
+        // Env vars take priority
+        for (k, v) in ProcessInfo.processInfo.environment { cache[k] = v }
+        // Then config file
         if let contents = try? String(contentsOfFile: configPath, encoding: .utf8) {
             for line in contents.components(separatedBy: .newlines) {
                 let parts = line.trimmingCharacters(in: .whitespaces).components(separatedBy: "=")
-                if parts.count >= 2 && parts[0].trimmingCharacters(in: .whitespaces) == "LOCKIN_API_KEY" {
-                    return parts.dropFirst().joined(separator: "=").trimmingCharacters(in: .whitespaces)
+                if parts.count >= 2 {
+                    let key = parts[0].trimmingCharacters(in: .whitespaces)
+                    let value = parts.dropFirst().joined(separator: "=").trimmingCharacters(in: .whitespaces)
+                    if !key.isEmpty { cache[key] = value }
                 }
             }
         }
-        return "YOUR_SENTIENCE_API_KEY"
-    }()
+    }
 
-    static var pollIntervalSeconds: Double = 150  // 2.5 min
-    static var procrastinationThreshold: Int = 2  // consecutive bad polls before first alert
-    static var escalationThreshold: Int = 5       // consecutive bad polls before escalation
+    func save() {
+        try? FileManager.default.createDirectory(
+            atPath: (configPath as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true)
+        let lines = cache
+            .filter { !ProcessInfo.processInfo.environment.keys.contains($0.key) } // don't write env vars
+            .map { "\($0.key)=\($0.value)" }
+            .sorted()
+            .joined(separator: "\n")
+        try? lines.write(toFile: configPath, atomically: true, encoding: .utf8)
+    }
 
-    static var focusDeadline: Date? = {
-        guard let s = ProcessInfo.processInfo.environment["LOCKIN_DEADLINE"] else { return nil }
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withFullDate, .withTime, .withColonSeparatorInTime]
-        return f.date(from: s)
-    }()
-
-    static let logPath: String = (NSHomeDirectory() as NSString)
-        .appendingPathComponent("Library/Logs/LockIn/procrastination.log")
+    private func val(_ key: String) -> String? { cache[key] }
+    private func set(_ key: String, _ value: String) { cache[key] = value; save() }
 }
 
 // ─────────────────────────────────────────────
@@ -48,160 +62,121 @@ struct Memory: Decodable {
     let source: String?
     let id: String?
 
-    // Stable dedup key — prefer id, fall back to content hash
     var dedupKey: String {
         if let id = id, !id.isEmpty { return id }
         return String(content.hashValue)
     }
 }
 
-struct MemoriesResponse: Decodable {
-    let memories: [Memory]?
-    // API might return array directly or wrapped
-}
+struct MemoriesResponse: Decodable { let memories: [Memory]? }
 
-enum APIError: Error {
-    case invalidURL, httpError(Int), decodingError, authError
-}
+enum APIError: Error { case invalidURL, httpError(Int), authError }
 
 actor SentienceAPI {
     private let baseURL = "https://audiosummarizer-production.up.railway.app"
     private var seenIds: Set<String> = []
 
-    func fetchRecentScreenshots() async throws -> [Memory] {
-        let end = Date()
-        let start = end.addingTimeInterval(-10 * 60)  // always look back 10 min
+    func fetchRecent() async throws -> [Memory] {
+        let end   = Date()
+        let start = end.addingTimeInterval(-10 * 60)
+        let fmt   = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime]
 
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-
-        let startStr = formatter.string(from: start)
-        let endStr = formatter.string(from: end)
-
-        guard var components = URLComponents(string: "\(baseURL)/v1/memories") else {
-            throw APIError.invalidURL
-        }
-        components.queryItems = [
-            URLQueryItem(name: "start", value: startStr),
-            URLQueryItem(name: "end", value: endStr)
+        guard var comps = URLComponents(string: "\(baseURL)/v1/memories") else { throw APIError.invalidURL }
+        comps.queryItems = [
+            URLQueryItem(name: "start", value: fmt.string(from: start)),
+            URLQueryItem(name: "end",   value: fmt.string(from: end)),
         ]
-        guard let url = components.url else { throw APIError.invalidURL }
+        guard let url = comps.url else { throw APIError.invalidURL }
 
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(Config.apiKey)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 15
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(Settings.shared.apiKey)", forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = 15
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        if let http = response as? HTTPURLResponse {
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        if let http = resp as? HTTPURLResponse {
             if http.statusCode == 401 || http.statusCode == 403 { throw APIError.authError }
             if http.statusCode != 200 { throw APIError.httpError(http.statusCode) }
         }
 
-        // Try array first, then wrapped object
-        var allMemories: [Memory] = []
-        if let memories = try? JSONDecoder().decode([Memory].self, from: data) {
-            allMemories = memories
+        var all: [Memory] = []
+        if let arr = try? JSONDecoder().decode([Memory].self, from: data) {
+            all = arr
         } else if let wrapped = try? JSONDecoder().decode(MemoriesResponse.self, from: data) {
-            allMemories = wrapped.memories ?? []
+            all = wrapped.memories ?? []
         } else if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let arr = json["memories"] as? [[String: Any]] {
-            allMemories = arr.compactMap { dict in
-                guard let content = dict["content"] as? String else { return nil }
-                return Memory(
-                    content: content,
-                    timestamp: dict["timestamp"] as? String,
-                    source: dict["source"] as? String,
-                    id: dict["id"] as? String
-                )
+            all = arr.compactMap {
+                guard let c = $0["content"] as? String else { return nil }
+                return Memory(content: c, timestamp: $0["timestamp"] as? String,
+                              source: $0["source"] as? String, id: $0["id"] as? String)
             }
         }
 
-        // Filter out already-seen memories (dedup by id/content hash)
-        let newMemories = allMemories.filter { !seenIds.contains($0.dedupKey) }
-        newMemories.forEach { seenIds.insert($0.dedupKey) }
-
-        // Cap seenIds size to avoid unbounded growth (keep last 500)
-        if seenIds.count > 500 {
-            seenIds = Set(seenIds.dropFirst(seenIds.count - 500))
-        }
-
-        return newMemories
+        let fresh = all.filter { !seenIds.contains($0.dedupKey) }
+        fresh.forEach { seenIds.insert($0.dedupKey) }
+        if seenIds.count > 500 { seenIds = Set(seenIds.dropFirst(seenIds.count - 500)) }
+        return fresh
     }
+
+    func resetSeen() { seenIds = [] }
 }
 
 // ─────────────────────────────────────────────
-// MARK: - Procrastination Detector
+// MARK: - Detector
 // ─────────────────────────────────────────────
 
 struct DetectionResult {
     let isProcrastinating: Bool
-    let detectedApp: String?
-    let confidence: Double  // 0-1
+    let detectedApp: String
+    let confidence: Double
 }
 
 struct Detector {
-    // Extract "Activity: Foo" value — everything between "Activity:" and "Description:"
-    private func parseActivity(from content: String) -> String? {
-        guard let actRange = content.range(of: "Activity:", options: .caseInsensitive) else { return nil }
-        let after = content[actRange.upperBound...].trimmingCharacters(in: .whitespaces)
-        if let descRange = after.range(of: "Description:", options: .caseInsensitive) {
-            return String(after[..<descRange.lowerBound]).trimmingCharacters(in: .whitespaces).lowercased()
+    private func field(_ label: String, in content: String, endingBefore next: String? = nil) -> String? {
+        guard let r = content.range(of: "\(label):", options: .caseInsensitive) else { return nil }
+        let after = content[r.upperBound...].trimmingCharacters(in: .whitespaces)
+        if let nxt = next, let nr = after.range(of: "\(nxt):", options: .caseInsensitive) {
+            return String(after[..<nr.lowerBound]).trimmingCharacters(in: .whitespaces)
         }
-        return after.lowercased()
+        return String(after)
     }
 
-    // Extract "Description: ..." value — everything after "Description:"
-    private func parseDescription(from content: String) -> String? {
-        guard let descRange = content.range(of: "Description:", options: .caseInsensitive) else { return nil }
-        return String(content[descRange.upperBound...]).trimmingCharacters(in: .whitespaces).lowercased()
-    }
-
-    func analyze(memories: [Memory]) -> DetectionResult {
+    func analyze(_ memories: [Memory]) -> DetectionResult {
         guard !memories.isEmpty else {
-            return DetectionResult(isProcrastinating: false, detectedApp: nil, confidence: 0)
+            return DetectionResult(isProcrastinating: false, detectedApp: "", confidence: 0)
         }
+        let badActivities: Set<String> = ["entertainment", "social media", "social networking"]
+        var bad = 0
+        var appName = ""
 
-        let procrastinationActivities: Set<String> = ["entertainment", "social media", "social networking"]
-
-        var badCount = 0
-        var detectedApp: String? = nil
-
-        for memory in memories {
-            guard let activity = parseActivity(from: memory.content),
-                  procrastinationActivities.contains(where: { activity.contains($0) }) else {
-                continue
-            }
-
-            badCount += 1
-
-            // Extract app name from description for notification message
-            if detectedApp == nil, let desc = parseDescription(from: memory.content) {
-                detectedApp = extractAppName(from: desc)
+        for m in memories {
+            guard let activity = field("Activity", in: m.content, endingBefore: "Description")?
+                    .lowercased() else { continue }
+            guard badActivities.contains(where: { activity.contains($0) }) else { continue }
+            bad += 1
+            if appName.isEmpty, let desc = field("Description", in: m.content) {
+                appName = extractApp(from: desc.lowercased()) ?? "a distraction"
             }
         }
 
-        let score = Double(badCount) / Double(memories.count)
         return DetectionResult(
-            isProcrastinating: badCount > 0,
-            detectedApp: detectedApp ?? "a distraction",
-            confidence: score
+            isProcrastinating: bad > 0,
+            detectedApp: appName.isEmpty ? "a distraction" : appName,
+            confidence: Double(bad) / Double(memories.count)
         )
     }
 
-    // Pull a recognisable app name out of the description for the notification
-    private func extractAppName(from description: String) -> String? {
-        let appNames: [String: String] = [
-            "instagram": "Instagram", "tiktok": "TikTok", "reddit": "Reddit",
-            "twitter": "Twitter", "x.com": "Twitter/X", "linkedin": "LinkedIn",
-            "snapchat": "Snapchat", "facebook": "Facebook", "twitch": "Twitch",
-            "netflix": "Netflix", "hulu": "Hulu", "disney+": "Disney+",
-            "apple tv": "Apple TV", "youtube shorts": "YouTube Shorts",
-            "youtube": "YouTube", "spotify": "Spotify",
+    private func extractApp(from desc: String) -> String? {
+        let apps: [(String, String)] = [
+            ("instagram","Instagram"), ("tiktok","TikTok"), ("reddit","Reddit"),
+            ("twitter","Twitter"), ("x.com","Twitter/X"), ("linkedin","LinkedIn"),
+            ("snapchat","Snapchat"), ("facebook","Facebook"), ("twitch","Twitch"),
+            ("netflix","Netflix"), ("hulu","Hulu"), ("disney+","Disney+"),
+            ("apple tv","Apple TV"), ("youtube shorts","YouTube Shorts"),
+            ("youtube","YouTube"), ("spotify","Spotify"),
         ]
-        for (keyword, name) in appNames {
-            if description.contains(keyword) { return name }
-        }
+        for (k, v) in apps { if desc.contains(k) { return v } }
         return nil
     }
 }
@@ -212,261 +187,405 @@ struct Detector {
 
 actor Logger {
     private let path: String
-
     init(path: String) {
         self.path = path
-        // Create directory if needed
         let dir = (path as NSString).deletingLastPathComponent
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     }
-
-    func log(_ message: String) {
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        let line = "[\(timestamp)] \(message)\n"
-        if let data = line.data(using: .utf8) {
-            if FileManager.default.fileExists(atPath: path) {
-                if let handle = FileHandle(forWritingAtPath: path) {
-                    handle.seekToEndOfFile()
-                    handle.write(data)
-                    handle.closeFile()
-                }
-            } else {
-                FileManager.default.createFile(atPath: path, contents: data)
-            }
-        }
+    func log(_ msg: String) {
+        let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(msg)\n"
         print(line, terminator: "")
+        guard let data = line.data(using: .utf8) else { return }
+        if FileManager.default.fileExists(atPath: path),
+           let fh = FileHandle(forWritingAtPath: path) {
+            fh.seekToEndOfFile(); fh.write(data); fh.closeFile()
+        } else {
+            FileManager.default.createFile(atPath: path, contents: data)
+        }
     }
 }
 
 // ─────────────────────────────────────────────
-// MARK: - Notification Manager
-// Uses osascript — works for bare binaries, no bundle required
+// MARK: - Notifications (osascript — no bundle needed)
 // ─────────────────────────────────────────────
 
-actor NotificationManager {
-    private var lastNotificationTime: Date = .distantPast
-    private let minInterval: TimeInterval = 60
+actor Notifier {
+    private var lastSent: Date = .distantPast
+    private let minGap: TimeInterval = 60
 
-    func requestPermission() async {
-        // No-op for osascript approach — no permission needed
+    func send(title: String, body: String, force: Bool = false) async {
+        guard force || Date().timeIntervalSince(lastSent) >= minGap else { return }
+        lastSent = Date()
+        fire(title: title, body: body)
     }
 
-    func send(title: String, body: String, sound: Bool = true) async {
-        let now = Date()
-        guard now.timeIntervalSince(lastNotificationTime) >= minInterval else { return }
-        lastNotificationTime = now
-        await deliver(title: title, body: body, sound: sound)
-    }
-
-    func sendEscalated(title: String, body: String) async {
-        lastNotificationTime = .distantPast  // bypass rate limit
-        await deliver(title: title, body: body, sound: true)
-    }
-
-    private func deliver(title: String, body: String, sound: Bool) async {
-        // Escape quotes for AppleScript
-        let safeTitle = title.replacingOccurrences(of: "\"", with: "'")
-        let safeBody  = body.replacingOccurrences(of: "\"", with: "'")
-        let soundPart = sound ? " sound name \"Basso\"" : ""
-        let script = "display notification \"\(safeBody)\" with title \"\(safeTitle)\"\(soundPart)"
-
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        task.arguments = ["-e", script]
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError  = FileHandle.nullDevice
-        try? task.run()
-        task.waitUntilExit()
+    private func fire(title: String, body: String) {
+        let t = title.replacingOccurrences(of: "\"", with: "'")
+        let b = body.replacingOccurrences(of:  "\"", with: "'")
+        let script = "display notification \"\(b)\" with title \"\(t)\" sound name \"Basso\""
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        p.arguments = ["-e", script]
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError  = FileHandle.nullDevice
+        try? p.run(); p.waitUntilExit()
     }
 }
 
 // ─────────────────────────────────────────────
-// MARK: - State Machine
+// MARK: - Settings Window
+// ─────────────────────────────────────────────
+
+@MainActor
+class SettingsWindowController: NSWindowController {
+    private var apiKeyField: NSSecureTextField!
+    private var pollSlider: NSSlider!
+    private var pollLabel: NSTextField!
+    private var thresholdStepper: NSStepper!
+    private var thresholdLabel: NSTextField!
+    private var statusLabel: NSTextField!
+    private weak var monitor: LockInMonitor?
+
+    init(monitor: LockInMonitor) {
+        self.monitor = monitor
+        let w = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 280),
+            styleMask: [.titled, .closable],
+            backing: .buffered, defer: false)
+        w.title = "LockIn Settings"
+        w.center()
+        super.init(window: w)
+        buildUI()
+    }
+    required init?(coder: NSCoder) { nil }
+
+    private func buildUI() {
+        guard let contentView = window?.contentView else { return }
+        contentView.wantsLayer = true
+
+        var y: CGFloat = 230
+
+        func label(_ text: String, x: CGFloat, y: CGFloat, w: CGFloat = 160) -> NSTextField {
+            let f = NSTextField(labelWithString: text)
+            f.frame = NSRect(x: x, y: y, width: w, height: 20)
+            f.font = .systemFont(ofSize: 13)
+            contentView.addSubview(f)
+            return f
+        }
+
+        // ── API Key ──
+        _ = label("Sentience API Key", x: 20, y: y)
+        apiKeyField = NSSecureTextField(frame: NSRect(x: 20, y: y - 26, width: 380, height: 22))
+        apiKeyField.placeholderString = "sent_..."
+        apiKeyField.stringValue = Settings.shared.apiKey
+        apiKeyField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        contentView.addSubview(apiKeyField)
+        y -= 62
+
+        // ── Poll Interval ──
+        _ = label("Poll interval", x: 20, y: y)
+        pollSlider = NSSlider(frame: NSRect(x: 20, y: y - 24, width: 300, height: 22))
+        pollSlider.minValue = 60; pollSlider.maxValue = 600
+        pollSlider.doubleValue = Settings.shared.pollInterval
+        pollSlider.isContinuous = true
+        pollSlider.target = self; pollSlider.action = #selector(pollSliderChanged)
+        contentView.addSubview(pollSlider)
+        pollLabel = label("", x: 330, y: y - 24, w: 70)
+        updatePollLabel()
+        y -= 56
+
+        // ── Threshold ──
+        _ = label("Alerts after N bad polls", x: 20, y: y)
+        thresholdStepper = NSStepper(frame: NSRect(x: 220, y: y - 2, width: 40, height: 22))
+        thresholdStepper.minValue = 1; thresholdStepper.maxValue = 10
+        thresholdStepper.intValue = Int32(Settings.shared.threshold)
+        thresholdStepper.target = self; thresholdStepper.action = #selector(thresholdChanged)
+        contentView.addSubview(thresholdStepper)
+        thresholdLabel = label("\(Settings.shared.threshold)", x: 268, y: y, w: 40)
+        y -= 50
+
+        // ── Status ──
+        statusLabel = label("", x: 20, y: y, w: 380)
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.font = .systemFont(ofSize: 11)
+
+        // ── Buttons ──
+        let save = NSButton(frame: NSRect(x: 310, y: 16, width: 90, height: 28))
+        save.title = "Save"; save.bezelStyle = .rounded
+        save.target = self; save.action = #selector(saveSettings)
+        contentView.addSubview(save)
+
+        let cancel = NSButton(frame: NSRect(x: 210, y: 16, width: 90, height: 28))
+        cancel.title = "Cancel"; cancel.bezelStyle = .rounded
+        cancel.target = self; cancel.action = #selector(cancelSettings)
+        contentView.addSubview(cancel)
+    }
+
+    @objc private func pollSliderChanged() { updatePollLabel() }
+    private func updatePollLabel() {
+        let v = Int(pollSlider.doubleValue)
+        pollLabel.stringValue = v < 60 ? "\(v)s" : "\(v/60)m \(v%60)s"
+    }
+
+    @objc private func thresholdChanged() {
+        thresholdLabel.stringValue = "\(thresholdStepper.intValue)"
+    }
+
+    @objc private func saveSettings() {
+        let key = apiKeyField.stringValue.trimmingCharacters(in: .whitespaces)
+        if key.isEmpty {
+            statusLabel.stringValue = "⚠️ API key cannot be empty"
+            statusLabel.textColor = .systemRed
+            return
+        }
+        Settings.shared.apiKey = key
+        Settings.shared.pollInterval = pollSlider.doubleValue
+        Settings.shared.threshold = Int(thresholdStepper.intValue)
+        monitor?.applySettings()
+        statusLabel.stringValue = "✅ Saved"
+        statusLabel.textColor = .systemGreen
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.window?.close() }
+    }
+
+    @objc private func cancelSettings() { window?.close() }
+}
+
+// ─────────────────────────────────────────────
+// MARK: - Monitor
 // ─────────────────────────────────────────────
 
 enum MonitorState {
     case focused
-    case procrastinating(consecutiveCount: Int, firstDetectedAt: Date, app: String)
+    case procrastinating(count: Int, since: Date, app: String)
     case paused
 }
 
-// ─────────────────────────────────────────────
-// MARK: - Main Monitor Engine
-// ─────────────────────────────────────────────
-
 @MainActor
 class LockInMonitor: NSObject {
-    private let api = SentienceAPI()
-    private let detector = Detector()
-    private let logger = Logger(path: Config.logPath)
-    private let notifications = NotificationManager()
+    private let api       = SentienceAPI()
+    private let detector  = Detector()
+    private let logger    = Logger(path: Settings.shared.logPath)
+    private let notifier  = Notifier()
 
     private var state: MonitorState = .focused
     private var statusItem: NSStatusItem?
     private var timer: Timer?
-    private var paused = false
-    private var focusDeadline: Date? = Config.focusDeadline
+    private var focusDeadline: Date?
+    private var lastPollTime: Date?
+    private var lastPollCount: Int = 0
 
-    // Menu items that need updating
-    private var pauseMenuItem: NSMenuItem?
-    private var deadlineMenuItem: NSMenuItem?
+    // Menu refs
     private var statusMenuItem: NSMenuItem?
-
-    // ── Setup ──
+    private var lastPollMenuItem: NSMenuItem?
+    private var deadlineMenuItem: NSMenuItem?
+    private var pauseMenuItem: NSMenuItem?
+    private var settingsWindowController: SettingsWindowController?
 
     func start() async {
-        await notifications.requestPermission()
         setupMenuBar()
         scheduleTimer()
-        await logger.log("LockIn started. Poll interval: \(Int(Config.pollIntervalSeconds))s")
+        await logger.log("LockIn started. Poll: \(Int(Settings.shared.pollInterval))s, threshold: \(Settings.shared.threshold)")
     }
 
-    // ── Menu Bar ──
+    func applySettings() {
+        timer?.invalidate()
+        Task { await api.resetSeen() }
+        scheduleTimer()
+        Task { await logger.log("Settings updated. Poll: \(Int(Settings.shared.pollInterval))s") }
+    }
+
+    // ── Menubar ──
 
     private func setupMenuBar() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        updateStatusIcon(procrastinating: false)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        setIcon(.focused)
 
         let menu = NSMenu()
 
-        // Status line
-        let statusItem = NSMenuItem(title: "Status: Focused 🟢", action: nil, keyEquivalent: "")
+        // Header — app name + version
+        let header = NSMenuItem(title: "LockIn", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        header.attributedTitle = NSAttributedString(
+            string: "🔒 LockIn",
+            attributes: [.font: NSFont.boldSystemFont(ofSize: 13)])
+        menu.addItem(header)
+
+        // Status
+        let statusItem = NSMenuItem(title: "Focused ✅", action: nil, keyEquivalent: "")
         statusItem.isEnabled = false
+        statusItem.indentationLevel = 1
         self.statusMenuItem = statusItem
         menu.addItem(statusItem)
 
+        // Last poll
+        let pollItem = NSMenuItem(title: "Last poll: —", action: nil, keyEquivalent: "")
+        pollItem.isEnabled = false
+        pollItem.indentationLevel = 1
+        pollItem.attributedTitle = NSAttributedString(
+            string: "Last poll: —",
+            attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
+        self.lastPollMenuItem = pollItem
+        menu.addItem(pollItem)
+
         menu.addItem(.separator())
 
-        // Focus session deadline
-        let deadlineItem = NSMenuItem(title: deadlineMenuTitle(), action: #selector(setDeadline), keyEquivalent: "")
-        deadlineItem.target = self
-        self.deadlineMenuItem = deadlineItem
-        menu.addItem(deadlineItem)
+        // Focus deadline
+        let dl = NSMenuItem(title: "⏱ Set Focus Deadline…", action: #selector(setDeadline), keyEquivalent: "d")
+        dl.target = self
+        self.deadlineMenuItem = dl
+        menu.addItem(dl)
 
         menu.addItem(.separator())
 
-        // Pause toggle
-        let pauseItem = NSMenuItem(title: "Pause Monitoring", action: #selector(togglePause), keyEquivalent: "p")
-        pauseItem.target = self
-        self.pauseMenuItem = pauseItem
-        menu.addItem(pauseItem)
+        // Pause
+        let pause = NSMenuItem(title: "⏸ Pause Monitoring", action: #selector(togglePause), keyEquivalent: "p")
+        pause.target = self
+        self.pauseMenuItem = pause
+        menu.addItem(pause)
+
+        // Settings
+        let settings = NSMenuItem(title: "⚙️ Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
 
         // Open log
-        let logItem = NSMenuItem(title: "Open Log…", action: #selector(openLog), keyEquivalent: "l")
-        logItem.target = self
-        menu.addItem(logItem)
+        let log = NSMenuItem(title: "📋 Open Log…", action: #selector(openLog), keyEquivalent: "l")
+        log.target = self
+        menu.addItem(log)
 
         menu.addItem(.separator())
 
         // Quit
-        let quitItem = NSMenuItem(title: "Quit LockIn", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        menu.addItem(quitItem)
+        menu.addItem(NSMenuItem(title: "Quit LockIn", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
         self.statusItem?.menu = menu
     }
 
-    private func updateStatusIcon(procrastinating: Bool) {
-        if let button = statusItem?.button {
-            button.title = procrastinating ? "🔴" : "🟢"
+    private enum IconState { case focused, procrastinating, paused }
+    private func setIcon(_ s: IconState) {
+        guard let btn = statusItem?.button else { return }
+        switch s {
+        case .focused:         btn.title = "🟢"; btn.toolTip = "LockIn — Focused"
+        case .procrastinating: btn.title = "🔴"; btn.toolTip = "LockIn — Procrastinating"
+        case .paused:          btn.title = "⏸️"; btn.toolTip = "LockIn — Paused"
         }
     }
 
-    private func deadlineMenuTitle() -> String {
-        guard let d = focusDeadline else { return "Set Focus Deadline…" }
-        let f = DateFormatter()
-        f.dateStyle = .none
-        f.timeStyle = .short
-        let remaining = d.timeIntervalSinceNow
-        if remaining <= 0 { return "Deadline passed" }
-        let hours = Int(remaining) / 3600
-        let mins = (Int(remaining) % 3600) / 60
-        return "Deadline: \(f.string(from: d)) (\(hours)h \(mins)m)"
+    private func updateLastPollLabel() {
+        guard let t = lastPollTime else { return }
+        let fmt = DateFormatter()
+        fmt.dateStyle = .none; fmt.timeStyle = .medium
+        let attr = NSAttributedString(
+            string: "Last poll: \(fmt.string(from: t)) · \(lastPollCount) new memories",
+            attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
+        lastPollMenuItem?.attributedTitle = attr
     }
 
     @objc private func togglePause() {
-        paused.toggle()
-        pauseMenuItem?.title = paused ? "Resume Monitoring" : "Pause Monitoring"
-        statusMenuItem?.title = paused ? "Status: Paused ⏸️" : "Status: Focused 🟢"
-        updateStatusIcon(procrastinating: false)
-        Task { await logger.log(paused ? "Monitoring paused" : "Monitoring resumed") }
+        if case .paused = state {
+            state = .focused
+            pauseMenuItem?.title = "⏸ Pause Monitoring"
+            setIcon(.focused)
+            statusMenuItem?.title = "Focused ✅"
+            Task { await logger.log("Resumed") }
+        } else {
+            state = .paused
+            pauseMenuItem?.title = "▶️ Resume Monitoring"
+            setIcon(.paused)
+            statusMenuItem?.title = "Paused ⏸️"
+            Task { await logger.log("Paused") }
+        }
     }
 
     @objc private func setDeadline() {
-        // Simple dialog to set deadline time
         let alert = NSAlert()
         alert.messageText = "Set Focus Deadline"
-        alert.informativeText = "Enter deadline time (e.g. 16:00 for 4pm today):"
-        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-        input.placeholderString = "HH:MM"
+        alert.informativeText = "Time today (e.g. 16:00 for 4pm):"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
+        field.placeholderString = "HH:MM"
         if let d = focusDeadline {
-            let f = DateFormatter()
-            f.dateFormat = "HH:mm"
-            input.stringValue = f.string(from: d)
+            let f = DateFormatter(); f.dateFormat = "HH:mm"
+            field.stringValue = f.string(from: d)
         }
-        alert.accessoryView = input
+        alert.accessoryView = field
         alert.addButton(withTitle: "Set")
         alert.addButton(withTitle: "Clear")
         alert.addButton(withTitle: "Cancel")
-
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            let f = DateFormatter()
-            f.dateFormat = "HH:mm"
-            if let time = f.date(from: input.stringValue) {
-                var components = Calendar.current.dateComponents([.year, .month, .day], from: Date())
-                let timeComponents = Calendar.current.dateComponents([.hour, .minute], from: time)
-                components.hour = timeComponents.hour
-                components.minute = timeComponents.minute
-                focusDeadline = Calendar.current.date(from: components)
-                deadlineMenuItem?.title = deadlineMenuTitle()
-                Task { await logger.log("Deadline set to \(input.stringValue)") }
+        let r = alert.runModal()
+        if r == .alertFirstButtonReturn {
+            let f = DateFormatter(); f.dateFormat = "HH:mm"
+            if let t = f.date(from: field.stringValue) {
+                var c = Calendar.current.dateComponents([.year,.month,.day], from: Date())
+                let tc = Calendar.current.dateComponents([.hour,.minute], from: t)
+                c.hour = tc.hour; c.minute = tc.minute
+                focusDeadline = Calendar.current.date(from: c)
+                updateDeadlineLabel()
+                Task { await logger.log("Deadline set: \(field.stringValue)") }
             }
-        } else if response == .alertSecondButtonReturn {
+        } else if r == .alertSecondButtonReturn {
             focusDeadline = nil
-            deadlineMenuItem?.title = "Set Focus Deadline…"
+            deadlineMenuItem?.title = "⏱ Set Focus Deadline…"
         }
     }
 
+    private func updateDeadlineLabel() {
+        guard let d = focusDeadline else { deadlineMenuItem?.title = "⏱ Set Focus Deadline…"; return }
+        let rem = d.timeIntervalSinceNow
+        guard rem > 0 else { deadlineMenuItem?.title = "⏱ Deadline passed"; return }
+        let h = Int(rem)/3600, m = (Int(rem)%3600)/60
+        let fmt = DateFormatter(); fmt.timeStyle = .short; fmt.dateStyle = .none
+        deadlineMenuItem?.title = "⏱ \(fmt.string(from: d)) — \(h)h \(m)m left"
+    }
+
+    @objc private func openSettings() {
+        NSApp.activate(ignoringOtherApps: true)
+        if settingsWindowController == nil {
+            settingsWindowController = SettingsWindowController(monitor: self)
+        }
+        settingsWindowController?.showWindow(nil)
+        settingsWindowController?.window?.makeKeyAndOrderFront(nil)
+    }
+
     @objc private func openLog() {
-        NSWorkspace.shared.open(URL(fileURLWithPath: Config.logPath))
+        NSWorkspace.shared.open(URL(fileURLWithPath: Settings.shared.logPath))
     }
 
     // ── Poll Loop ──
 
     private func scheduleTimer() {
-        // First poll after 10 seconds, then every pollIntervalSeconds
+        timer?.invalidate()
         Task {
-            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
             await poll()
         }
-        timer = Timer.scheduledTimer(withTimeInterval: Config.pollIntervalSeconds, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: Settings.shared.pollInterval, repeats: true) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in await self.poll() }
         }
     }
 
     private func poll() async {
-        guard !paused else { return }
+        if case .paused = state { return }
 
         do {
-            let memories = try await api.fetchRecentScreenshots()
-            await logger.log("Fetched \(memories.count) memories")
+            let memories = try await api.fetchRecent()
+            lastPollTime = Date()
+            lastPollCount = memories.count
+            updateLastPollLabel()
+            updateDeadlineLabel()
+            await logger.log("Fetched \(memories.count) new memories")
 
-            guard !memories.isEmpty else {
-                // No recent screenshots — assume focused
-                await handleFocused()
-                return
-            }
-
-            let result = detector.analyze(memories: memories)
-
-            if result.isProcrastinating, let app = result.detectedApp {
-                await handleProcrastination(app: app)
+            let result = detector.analyze(memories)
+            if result.isProcrastinating {
+                await handleProcrastination(app: result.detectedApp)
             } else {
                 await handleFocused()
             }
         } catch APIError.authError {
-            await logger.log("ERROR: Invalid API key. Check LOCKIN_API_KEY.")
+            await logger.log("ERROR: Invalid API key — open Settings to update it")
+            lastPollMenuItem?.attributedTitle = NSAttributedString(
+                string: "⚠️ Invalid API key — open Settings",
+                attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.systemRed])
         } catch {
             await logger.log("Poll error: \(error)")
         }
@@ -475,124 +594,74 @@ class LockInMonitor: NSObject {
     private func handleProcrastination(app: String) async {
         switch state {
         case .focused:
-            // First detection — start counting
-            state = .procrastinating(consecutiveCount: 1, firstDetectedAt: Date(), app: app)
-            await logger.log("Procrastination detected: \(app) (count: 1)")
+            state = .procrastinating(count: 1, since: Date(), app: app)
+            await logger.log("Procrastination detected: \(app) (1)")
 
-        case .procrastinating(let count, let firstDetectedAt, _):
-            let newCount = count + 1
-            state = .procrastinating(consecutiveCount: newCount, firstDetectedAt: firstDetectedAt, app: app)
-            await logger.log("Procrastination continuing: \(app) (count: \(newCount))")
+        case .procrastinating(let n, let since, _):
+            let newN = n + 1
+            state = .procrastinating(count: newN, since: since, app: app)
+            await logger.log("Procrastination: \(app) (\(newN))")
+            let mins = Int(Date().timeIntervalSince(since) / 60)
+            let threshold = Settings.shared.threshold
 
-            let minutesWasted = Int(Date().timeIntervalSince(firstDetectedAt) / 60)
-
-            if newCount == Config.procrastinationThreshold {
-                // First notification
-                let body = countdownSuffix(base: "You've been on \(app) for ~\(minutesWasted) min. Lock in.")
-                await notifications.send(title: "🔴 Lock In", body: body)
-                updateStatusIcon(procrastinating: true)
-                statusMenuItem?.title = "Status: Procrastinating 🔴"
-                await logger.log("NOTIFICATION sent (level 1): \(app)")
-
-            } else if newCount > Config.procrastinationThreshold && (newCount - Config.procrastinationThreshold) % 2 == 0 {
-                // Escalation every 2 polls after threshold
-                let level = (newCount - Config.procrastinationThreshold) / 2 + 1
-                let messages = escalationMessages(app: app, minutes: minutesWasted, level: level)
-                await notifications.sendEscalated(title: messages.title, body: messages.body)
-                await logger.log("NOTIFICATION sent (level \(level)): \(app)")
+            if newN == threshold {
+                await notifier.send(title: "🔴 Lock In",
+                                    body: countdownSuffix("You've been on \(app) for ~\(max(1,mins)) min. Lock in."))
+                setIcon(.procrastinating)
+                statusMenuItem?.title = "Procrastinating on \(app) 🔴"
+                await logger.log("ALERT L1: \(app)")
+            } else if newN > threshold, (newN - threshold) % 2 == 0 {
+                let lvl = (newN - threshold) / 2 + 1
+                let (t, b) = escalation(app: app, mins: mins, level: lvl)
+                await notifier.send(title: t, body: b, force: true)
+                await logger.log("ALERT L\(lvl): \(app)")
             }
 
-        case .paused:
-            break
+        case .paused: break
         }
     }
 
     private func handleFocused() async {
-        switch state {
-        case .procrastinating(let count, _, let app) where count >= Config.procrastinationThreshold:
-            // Was procrastinating, now back on track — send positive notification
-            await notifications.send(title: "✅ Back on Track", body: "Stopped \(app). Keep going.")
-            updateStatusIcon(procrastinating: false)
-            statusMenuItem?.title = "Status: Focused 🟢"
-            state = .focused
-            await logger.log("Back on track (was on \(app))")
-
-        case .procrastinating:
-            // Was detected but below threshold — just silently reset
-            state = .focused
-            await logger.log("Procrastination cleared (below threshold)")
-
-        case .focused:
-            break
-
-        case .paused:
-            break
+        if case .procrastinating(let n, _, let app) = state, n >= Settings.shared.threshold {
+            await notifier.send(title: "✅ Back on Track", body: "Stopped \(app). Keep going.")
+            setIcon(.focused)
+            statusMenuItem?.title = "Focused ✅"
+            await logger.log("Back on track (was: \(app))")
         }
-
-        // Update deadline display
-        deadlineMenuItem?.title = deadlineMenuTitle()
+        if case .procrastinating = state { state = .focused }
     }
 
-    // ── Notification Helpers ──
-
-    private func countdownSuffix(base: String) -> String {
-        guard let deadline = focusDeadline else { return base }
-        let remaining = deadline.timeIntervalSinceNow
-        guard remaining > 0 else { return base + " Deadline already passed!" }
-        let hours = Int(remaining) / 3600
-        let mins = (Int(remaining) % 3600) / 60
-        return base + " (\(hours)h \(mins)m until deadline)"
+    private func countdownSuffix(_ base: String) -> String {
+        guard let d = focusDeadline, d.timeIntervalSinceNow > 0 else { return base }
+        let r = d.timeIntervalSinceNow
+        return base + " (\(Int(r)/3600)h \((Int(r)%3600)/60)m left)"
     }
 
-    private func escalationMessages(app: String, minutes: Int, level: Int) -> (title: String, body: String) {
-        let deadlinePart: String
-        if let deadline = focusDeadline {
-            let remaining = deadline.timeIntervalSinceNow
-            if remaining > 0 {
-                let hours = Int(remaining) / 3600
-                let mins = (Int(remaining) % 3600) / 60
-                deadlinePart = " \(hours)h \(mins)m left."
-            } else {
-                deadlinePart = " DEADLINE PASSED."
-            }
-        } else {
-            deadlinePart = ""
-        }
-
+    private func escalation(app: String, mins: Int, level: Int) -> (String, String) {
+        let dl: String = {
+            guard let d = focusDeadline else { return "" }
+            let r = d.timeIntervalSinceNow
+            return r > 0 ? " \(Int(r)/3600)h \((Int(r)%3600)/60)m left." : " DEADLINE PASSED."
+        }()
         switch level {
-        case 1:
-            return (
-                title: "⚠️ Still on \(app)?",
-                body: "You've wasted \(minutes) minutes.\(deadlinePart) Get back to work."
-            )
-        case 2:
-            return (
-                title: "🚨 \(minutes) MINUTES GONE",
-                body: "\(app) is costing you.\(deadlinePart) Close it. Now."
-            )
-        default:
-            return (
-                title: "🔥 \(minutes) MINUTES. LOCK IN.",
-                body: "Every minute on \(app) is a minute you don't have.\(deadlinePart)"
-            )
+        case 1: return ("⚠️ Still on \(app)?",   "Wasted \(mins) min.\(dl) Get back to work.")
+        case 2: return ("🚨 \(mins) MINUTES GONE", "\(app) is costing you.\(dl) Close it. Now.")
+        default:return ("🔥 LOCK IN.",             "Every minute on \(app) is a minute you don't have.\(dl)")
         }
     }
 }
 
 // ─────────────────────────────────────────────
-// MARK: - App Entry Point
+// MARK: - Entry Point
 // ─────────────────────────────────────────────
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     var monitor: LockInMonitor?
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    func applicationDidFinishLaunching(_ n: Notification) {
         NSApp.setActivationPolicy(.accessory)
         monitor = LockInMonitor()
-        Task {
-            await monitor?.start()
-        }
+        Task { await monitor?.start() }
     }
 }
 
