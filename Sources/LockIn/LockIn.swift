@@ -239,7 +239,9 @@ actor Notifier {
 
 @MainActor
 class SettingsWindowController: NSWindowController {
-    private var apiKeyField: NSSecureTextField!
+    private var apiKeyField: NSTextField!
+    private var apiKeySecure: NSSecureTextField!
+    private var showingKey = false
     private var pollSlider: NSSlider!
     private var pollLabel: NSTextField!
     private var thresholdStepper: NSStepper!
@@ -276,11 +278,40 @@ class SettingsWindowController: NSWindowController {
 
         // ── API Key ──
         _ = label("Sentience API Key", x: 20, y: y)
-        apiKeyField = NSSecureTextField(frame: NSRect(x: 20, y: y - 26, width: 380, height: 22))
+
+        // Secure field (default, hidden)
+        apiKeySecure = NSSecureTextField(frame: NSRect(x: 20, y: y - 26, width: 310, height: 22))
+        apiKeySecure.placeholderString = "sent_..."
+        apiKeySecure.stringValue = Settings.shared.apiKey
+        apiKeySecure.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        contentView.addSubview(apiKeySecure)
+
+        // Plain field (shown when toggled)
+        apiKeyField = NSTextField(frame: NSRect(x: 20, y: y - 26, width: 310, height: 22))
         apiKeyField.placeholderString = "sent_..."
         apiKeyField.stringValue = Settings.shared.apiKey
         apiKeyField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        apiKeyField.isHidden = true
         contentView.addSubview(apiKeyField)
+
+        // Show/Hide button
+        let toggleBtn = NSButton(frame: NSRect(x: 336, y: y - 26, width: 28, height: 22))
+        toggleBtn.title = "👁"
+        toggleBtn.bezelStyle = .rounded
+        toggleBtn.isBordered = true
+        toggleBtn.target = self
+        toggleBtn.action = #selector(toggleKeyVisibility)
+        contentView.addSubview(toggleBtn)
+
+        // Copy button
+        let copyBtn = NSButton(frame: NSRect(x: 368, y: y - 26, width: 32, height: 22))
+        copyBtn.title = "⎘"
+        copyBtn.bezelStyle = .rounded
+        copyBtn.toolTip = "Copy API key"
+        copyBtn.target = self
+        copyBtn.action = #selector(copyApiKey)
+        contentView.addSubview(copyBtn)
+
         y -= 62
 
         // ── Poll Interval ──
@@ -332,8 +363,30 @@ class SettingsWindowController: NSWindowController {
         thresholdLabel.stringValue = "\(thresholdStepper.intValue)"
     }
 
+    @objc private func toggleKeyVisibility() {
+        showingKey.toggle()
+        if showingKey {
+            apiKeyField.stringValue = apiKeySecure.stringValue
+            apiKeyField.isHidden = false
+            apiKeySecure.isHidden = true
+        } else {
+            apiKeySecure.stringValue = apiKeyField.stringValue
+            apiKeySecure.isHidden = false
+            apiKeyField.isHidden = true
+        }
+    }
+
+    @objc private func copyApiKey() {
+        let key = showingKey ? apiKeyField.stringValue : apiKeySecure.stringValue
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(key, forType: .string)
+        statusLabel.stringValue = "📋 Copied to clipboard"
+        statusLabel.textColor = .secondaryLabelColor
+    }
+
     @objc private func saveSettings() {
-        let key = apiKeyField.stringValue.trimmingCharacters(in: .whitespaces)
+        let key = (showingKey ? apiKeyField.stringValue : apiKeySecure.stringValue)
+            .trimmingCharacters(in: .whitespaces)
         if key.isEmpty {
             statusLabel.stringValue = "⚠️ API key cannot be empty"
             statusLabel.textColor = .systemRed
