@@ -190,6 +190,11 @@ struct Detector {
             // Now check Description for the specific app
             let description = parseDescription(from: content) ?? content.lowercased()
 
+            // Skip memories that are about LockIn/Sentience itself — avoids false positives
+            // from screen captures of this conversation or the Sentience app
+            let selfReferential = ["lockin", "lock in", "sentience", "procrastin", "whatsapp", "imessage", "messages app"]
+            if selfReferential.contains(where: { description.contains($0) }) { continue }
+
             for keyword in Config.procrastinationKeywords {
                 if description.contains(keyword) {
                     print("FLAGGED: activity=\(activity) | keyword=\(keyword) | desc=\(description.prefix(120))")
