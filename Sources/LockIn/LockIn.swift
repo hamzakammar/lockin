@@ -37,18 +37,7 @@ struct Config {
     static let procrastinationKeywords: [String] = [
         "instagram", "tiktok", "reddit", "twitter", "x.com",
         "linkedin", "snapchat", "facebook", "twitch",
-        "netflix", "hulu", "disney+", "apple tv",
-        "youtube shorts", "reels", "for you page",
-        "trending", "explore page", "fyp"
-    ]
-
-    static let educationalKeywords: [String] = [
-        "tutorial", "lecture", "course", "how to", "learn", "study",
-        "explained", "introduction to", "programming", "coding",
-        "math", "physics", "chemistry", "engineering", "mit",
-        "stanford", "khan academy", "3blue1brown", "crash course",
-        "computerphile", "sentdex", "freecodecamp", "cs50",
-        "homework", "assignment", "project", "exam prep"
+        "netflix", "hulu", "disney+", "apple tv", "youtube shorts"
     ]
 
     static let logPath: String = (NSHomeDirectory() as NSString)
@@ -158,44 +147,71 @@ struct DetectionResult {
 }
 
 struct Detector {
+    // Parse "Activity: Foo" line from memory content
+    private func parseActivity(from content: String) -> String? {
+        for line in content.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.lowercased().hasPrefix("activity:") {
+                return trimmed.dropFirst("activity:".count).trimmingCharacters(in: .whitespaces).lowercased()
+            }
+        }
+        return nil
+    }
+
+    // Parse "Description: ..." line from memory content
+    private func parseDescription(from content: String) -> String? {
+        for line in content.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.lowercased().hasPrefix("description:") {
+                return trimmed.dropFirst("description:".count).trimmingCharacters(in: .whitespaces).lowercased()
+            }
+        }
+        return nil
+    }
+
     func analyze(memories: [Memory]) -> DetectionResult {
         guard !memories.isEmpty else {
             return DetectionResult(isProcrastinating: false, detectedApp: nil, confidence: 0)
         }
 
-        // Analyze the most recent memories (last 5 minutes)
-        let combinedContent = memories.map { $0.content.lowercased() }.joined(separator: " ")
+        // Procrastination activity labels from Sentience
+        let procrastinationActivities: Set<String> = [
+            "entertainment", "social media", "social networking",
+            "browsing", "leisure", "gaming"
+        ]
 
-        // Check for procrastination keywords
         var detectedApp: String? = nil
-        var maxScore = 0.0
+        var badCount = 0
 
-        for keyword in Config.procrastinationKeywords {
-            if combinedContent.contains(keyword) {
-                // Check if this is YouTube + educational
-                if isYouTube(keyword: keyword) {
-                    let isEducational = Config.educationalKeywords.contains { combinedContent.contains($0) }
-                    if isEducational { continue }  // educational YouTube — skip
-                }
-                // Score based on how many memories mention it
-                let count = memories.filter { $0.content.lowercased().contains(keyword) }.count
-                let score = Double(count) / Double(memories.count)
-                if score > maxScore {
-                    maxScore = score
-                    detectedApp = canonicalName(keyword: keyword)
+        for memory in memories {
+            let content = memory.content
+
+            // Must have a procrastination Activity label — this is the primary gate
+            guard let activity = parseActivity(from: content),
+                  procrastinationActivities.contains(where: { activity.contains($0) }) else {
+                continue
+            }
+
+            // Now check Description for the specific app
+            let description = parseDescription(from: content) ?? content.lowercased()
+
+            for keyword in Config.procrastinationKeywords {
+                if description.contains(keyword) {
+                    badCount += 1
+                    if detectedApp == nil {
+                        detectedApp = canonicalName(keyword: keyword)
+                    }
+                    break
                 }
             }
         }
 
+        let score = memories.isEmpty ? 0.0 : Double(badCount) / Double(memories.count)
         return DetectionResult(
-            isProcrastinating: maxScore > 0,
+            isProcrastinating: badCount > 0,
             detectedApp: detectedApp,
-            confidence: maxScore
+            confidence: score
         )
-    }
-
-    private func isYouTube(keyword: String) -> Bool {
-        return keyword.contains("youtube") && !keyword.contains("shorts")
     }
 
     private func canonicalName(keyword: String) -> String {
