@@ -147,26 +147,21 @@ struct DetectionResult {
 }
 
 struct Detector {
-    // Parse "Activity: Foo" line from memory content
+    // Parse "Activity: Foo Description: ..." from a single-line memory
     private func parseActivity(from content: String) -> String? {
-        for line in content.components(separatedBy: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.lowercased().hasPrefix("activity:") {
-                return trimmed.dropFirst("activity:".count).trimmingCharacters(in: .whitespaces).lowercased()
-            }
+        guard let actRange = content.range(of: "Activity:", options: .caseInsensitive) else { return nil }
+        let after = content[actRange.upperBound...].trimmingCharacters(in: .whitespaces)
+        // Activity ends at "Description:" or end of string
+        if let descRange = after.range(of: "Description:", options: .caseInsensitive) {
+            return String(after[..<descRange.lowerBound]).trimmingCharacters(in: .whitespaces).lowercased()
         }
-        return nil
+        return after.lowercased()
     }
 
-    // Parse "Description: ..." line from memory content
+    // Parse "Description: ..." from a single-line memory
     private func parseDescription(from content: String) -> String? {
-        for line in content.components(separatedBy: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.lowercased().hasPrefix("description:") {
-                return trimmed.dropFirst("description:".count).trimmingCharacters(in: .whitespaces).lowercased()
-            }
-        }
-        return nil
+        guard let descRange = content.range(of: "Description:", options: .caseInsensitive) else { return nil }
+        return String(content[descRange.upperBound...]).trimmingCharacters(in: .whitespaces).lowercased()
     }
 
     func analyze(memories: [Memory]) -> DetectionResult {
