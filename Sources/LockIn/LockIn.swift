@@ -151,6 +151,8 @@ struct Detector {
         var appName = ""
 
         for m in memories {
+            // Dump first 200 chars of each memory for debugging
+            print("RAW: \(m.content.prefix(200))")
             guard let activity = field("Activity", in: m.content, endingBefore: "Description")?
                     .lowercased() else { continue }
             print("MEMORY activity=[\(activity)]")
