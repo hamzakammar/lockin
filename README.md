@@ -29,7 +29,13 @@ cp .build/release/LockIn /usr/local/bin/LockIn
 
 ### 3. Set your API key
 
-Open `com.hamza.lockin.plist` and replace `YOUR_SENTIENCE_API_KEY_HERE` with your Sentience API key (get it from sentience.com → Connections → API Key → Generate).
+Create a config file (simplest approach — works with launchd too):
+```bash
+mkdir -p ~/.lockin
+echo "LOCKIN_API_KEY=your_key_here" > ~/.lockin/config
+```
+
+Or set it as an env var in the plist (see `com.hamza.lockin.plist`).
 
 ### 4. Optional: set a deadline
 

@@ -6,14 +6,27 @@ import AppKit
 // ─────────────────────────────────────────────
 
 struct Config {
-    // Fill these in or set as env vars
-    static var apiKey: String = ProcessInfo.processInfo.environment["LOCKIN_API_KEY"] ?? "YOUR_SENTIENCE_API_KEY"
+    // Priority: 1) env var  2) ~/.lockin/config  3) hardcoded fallback
+    static var apiKey: String = {
+        // Check env var first
+        if let k = ProcessInfo.processInfo.environment["LOCKIN_API_KEY"], !k.isEmpty { return k }
+        // Fall back to config file: ~/.lockin/config (KEY=VALUE format)
+        let configPath = (NSHomeDirectory() as NSString).appendingPathComponent(".lockin/config")
+        if let contents = try? String(contentsOfFile: configPath, encoding: .utf8) {
+            for line in contents.components(separatedBy: .newlines) {
+                let parts = line.trimmingCharacters(in: .whitespaces).components(separatedBy: "=")
+                if parts.count >= 2 && parts[0].trimmingCharacters(in: .whitespaces) == "LOCKIN_API_KEY" {
+                    return parts.dropFirst().joined(separator: "=").trimmingCharacters(in: .whitespaces)
+                }
+            }
+        }
+        return "YOUR_SENTIENCE_API_KEY"
+    }()
+
     static var pollIntervalSeconds: Double = 150  // 2.5 min
     static var procrastinationThreshold: Int = 2  // consecutive bad polls before first alert
     static var escalationThreshold: Int = 5       // consecutive bad polls before escalation
 
-    // Focus session — set via menubar or env var
-    // Format: ISO8601, e.g. "2025-04-16T16:00:00"
     static var focusDeadline: Date? = {
         guard let s = ProcessInfo.processInfo.environment["LOCKIN_DEADLINE"] else { return nil }
         let f = ISO8601DateFormatter()
@@ -21,7 +34,6 @@ struct Config {
         return f.date(from: s)
     }()
 
-    // Apps / keywords that count as procrastination
     static let procrastinationKeywords: [String] = [
         "instagram", "tiktok", "reddit", "twitter", "x.com",
         "linkedin", "snapchat", "facebook", "twitch",
@@ -30,7 +42,6 @@ struct Config {
         "trending", "explore page", "fyp"
     ]
 
-    // YouTube educational keywords — presence of these = NOT procrastination even on YouTube
     static let educationalKeywords: [String] = [
         "tutorial", "lecture", "course", "how to", "learn", "study",
         "explained", "introduction to", "programming", "coding",
@@ -40,7 +51,6 @@ struct Config {
         "homework", "assignment", "project", "exam prep"
     ]
 
-    // Log file path
     static let logPath: String = (NSHomeDirectory() as NSString)
         .appendingPathComponent("Library/Logs/LockIn/procrastination.log")
 }
@@ -428,14 +438,14 @@ class LockInMonitor: NSObject {
     // ── Poll Loop ──
 
     private func scheduleTimer() {
+        // First poll after 10 seconds, then every pollIntervalSeconds
+        Task {
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            await poll()
+        }
         timer = Timer.scheduledTimer(withTimeInterval: Config.pollIntervalSeconds, repeats: true) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in await self.poll() }
-        }
-        // Also run immediately after a short delay
-        Task {
-            try? await Task.sleep(nanoseconds: 3_000_000_000)  // 3s startup delay
-            await poll()
         }
     }
 
