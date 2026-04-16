@@ -233,8 +233,22 @@ actor Notifier {
     }
 }
 
-// ─────────────────────────────────────────────
-// MARK: - Settings Window
+// NSSecureTextField blocks paste — subclass to allow it
+class PasteableSecureTextField: NSSecureTextField {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.command) {
+            switch event.charactersIgnoringModifiers {
+            case "v": return NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: self)
+            case "c": return NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: self)
+            case "x": return NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: self)
+            case "a": return NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: self)
+            default: break
+            }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
 // ─────────────────────────────────────────────
 
 @MainActor
@@ -280,7 +294,7 @@ class SettingsWindowController: NSWindowController {
         _ = label("Sentience API Key", x: 20, y: y)
 
         // Secure field (default, hidden)
-        apiKeySecure = NSSecureTextField(frame: NSRect(x: 20, y: y - 26, width: 310, height: 22))
+        apiKeySecure = PasteableSecureTextField(frame: NSRect(x: 20, y: y - 26, width: 310, height: 22))
         apiKeySecure.placeholderString = "sent_..."
         apiKeySecure.stringValue = Settings.shared.apiKey
         apiKeySecure.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
