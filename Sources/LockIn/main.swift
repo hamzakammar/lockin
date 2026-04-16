@@ -589,8 +589,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-// Bootstrap
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.run()
+// Bootstrap — @MainActor ensures this runs on the main actor
+@MainActor
+func launchApp() {
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    app.delegate = delegate
+    app.run()
+}
+
+launchApp()
