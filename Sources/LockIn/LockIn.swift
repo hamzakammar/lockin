@@ -204,6 +204,7 @@ struct Detector {
         }
         return nil
     }
+}
 
 // ─────────────────────────────────────────────
 // MARK: - Logger
