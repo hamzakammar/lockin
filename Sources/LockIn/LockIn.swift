@@ -34,12 +34,6 @@ struct Config {
         return f.date(from: s)
     }()
 
-    static let procrastinationKeywords: [String] = [
-        "instagram", "tiktok", "reddit", "twitter", "x.com",
-        "linkedin", "snapchat", "facebook", "twitch",
-        "netflix", "hulu", "disney+", "apple tv", "youtube shorts"
-    ]
-
     static let logPath: String = (NSHomeDirectory() as NSString)
         .appendingPathComponent("Library/Logs/LockIn/procrastination.log")
 }
@@ -147,18 +141,17 @@ struct DetectionResult {
 }
 
 struct Detector {
-    // Parse "Activity: Foo Description: ..." from a single-line memory
+    // Extract "Activity: Foo" value — everything between "Activity:" and "Description:"
     private func parseActivity(from content: String) -> String? {
         guard let actRange = content.range(of: "Activity:", options: .caseInsensitive) else { return nil }
         let after = content[actRange.upperBound...].trimmingCharacters(in: .whitespaces)
-        // Activity ends at "Description:" or end of string
         if let descRange = after.range(of: "Description:", options: .caseInsensitive) {
             return String(after[..<descRange.lowerBound]).trimmingCharacters(in: .whitespaces).lowercased()
         }
         return after.lowercased()
     }
 
-    // Parse "Description: ..." from a single-line memory
+    // Extract "Description: ..." value — everything after "Description:"
     private func parseDescription(from content: String) -> String? {
         guard let descRange = content.range(of: "Description:", options: .caseInsensitive) else { return nil }
         return String(content[descRange.upperBound...]).trimmingCharacters(in: .whitespaces).lowercased()
@@ -169,72 +162,48 @@ struct Detector {
             return DetectionResult(isProcrastinating: false, detectedApp: nil, confidence: 0)
         }
 
-        // Procrastination activity labels from Sentience
-        let procrastinationActivities: Set<String> = [
-            "entertainment", "social media", "social networking",
-            "browsing", "leisure", "gaming"
-        ]
+        let procrastinationActivities: Set<String> = ["entertainment", "social media", "social networking"]
 
-        var detectedApp: String? = nil
         var badCount = 0
+        var detectedApp: String? = nil
 
         for memory in memories {
-            let content = memory.content
-
-            // Must have a procrastination Activity label — this is the primary gate
-            guard let activity = parseActivity(from: content),
+            guard let activity = parseActivity(from: memory.content),
                   procrastinationActivities.contains(where: { activity.contains($0) }) else {
                 continue
             }
 
-            // Now check Description for the specific app
-            let description = parseDescription(from: content) ?? content.lowercased()
+            badCount += 1
 
-            // Skip memories that are about LockIn/Sentience itself — avoids false positives
-            // from screen captures of this conversation or the Sentience app
-            let selfReferential = ["lockin", "lock in", "sentience", "procrastin", "whatsapp", "imessage", "messages app"]
-            if selfReferential.contains(where: { description.contains($0) }) { continue }
-
-            for keyword in Config.procrastinationKeywords {
-                if description.contains(keyword) {
-                    print("FLAGGED: activity=\(activity) | keyword=\(keyword) | desc=\(description.prefix(120))")
-                    badCount += 1
-                    if detectedApp == nil {
-                        detectedApp = canonicalName(keyword: keyword)
-                    }
-                    break
-                }
+            // Extract app name from description for notification message
+            if detectedApp == nil, let desc = parseDescription(from: memory.content) {
+                detectedApp = extractAppName(from: desc)
             }
         }
 
-        let score = memories.isEmpty ? 0.0 : Double(badCount) / Double(memories.count)
+        let score = Double(badCount) / Double(memories.count)
         return DetectionResult(
             isProcrastinating: badCount > 0,
-            detectedApp: detectedApp,
+            detectedApp: detectedApp ?? "a distraction",
             confidence: score
         )
     }
 
-    private func canonicalName(keyword: String) -> String {
-        let map: [String: String] = [
-            "instagram": "Instagram",
-            "tiktok": "TikTok",
-            "reddit": "Reddit",
-            "twitter": "Twitter/X",
-            "x.com": "Twitter/X",
-            "linkedin": "LinkedIn",
-            "snapchat": "Snapchat",
-            "facebook": "Facebook",
-            "twitch": "Twitch",
-            "netflix": "Netflix",
-            "hulu": "Hulu",
-            "disney+": "Disney+",
-            "apple tv": "Apple TV",
-            "youtube shorts": "YouTube Shorts",
+    // Pull a recognisable app name out of the description for the notification
+    private func extractAppName(from description: String) -> String? {
+        let appNames: [String: String] = [
+            "instagram": "Instagram", "tiktok": "TikTok", "reddit": "Reddit",
+            "twitter": "Twitter", "x.com": "Twitter/X", "linkedin": "LinkedIn",
+            "snapchat": "Snapchat", "facebook": "Facebook", "twitch": "Twitch",
+            "netflix": "Netflix", "hulu": "Hulu", "disney+": "Disney+",
+            "apple tv": "Apple TV", "youtube shorts": "YouTube Shorts",
+            "youtube": "YouTube", "spotify": "Spotify",
         ]
-        return map[keyword] ?? keyword.capitalized
+        for (keyword, name) in appNames {
+            if description.contains(keyword) { return name }
+        }
+        return nil
     }
-}
 
 // ─────────────────────────────────────────────
 // MARK: - Logger
