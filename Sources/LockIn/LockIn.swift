@@ -153,6 +153,7 @@ struct Detector {
         for m in memories {
             guard let activity = field("Activity", in: m.content, endingBefore: "Description")?
                     .lowercased() else { continue }
+            print("MEMORY activity=[\(activity)]")
             guard badActivities.contains(where: { activity.contains($0) }) else { continue }
             bad += 1
             if appName.isEmpty, let desc = field("Description", in: m.content) {
