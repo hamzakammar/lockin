@@ -64,6 +64,12 @@ struct Memory: Decodable {
     let timestamp: String?
     let source: String?
     let id: String?
+
+    // Stable dedup key — prefer id, fall back to content hash
+    var dedupKey: String {
+        if let id = id, !id.isEmpty { return id }
+        return String(content.hashValue)
+    }
 }
 
 struct MemoriesResponse: Decodable {
@@ -77,10 +83,11 @@ enum APIError: Error {
 
 actor SentienceAPI {
     private let baseURL = "https://audiosummarizer-production.up.railway.app"
+    private var seenIds: Set<String> = []
 
     func fetchRecentScreenshots() async throws -> [Memory] {
         let end = Date()
-        let start = end.addingTimeInterval(-Config.pollIntervalSeconds)
+        let start = end.addingTimeInterval(-10 * 60)  // always look back 10 min
 
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
@@ -109,17 +116,14 @@ actor SentienceAPI {
         }
 
         // Try array first, then wrapped object
+        var allMemories: [Memory] = []
         if let memories = try? JSONDecoder().decode([Memory].self, from: data) {
-            return memories  // return all memory types, detector filters by content
-        }
-        if let wrapped = try? JSONDecoder().decode(MemoriesResponse.self, from: data) {
-            return (wrapped.memories ?? [])  // return all memory types
-        }
-
-        // Maybe it's {"memories": [...]} with different shape - try raw JSON
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let arr = json["memories"] as? [[String: Any]] {
-            return arr.compactMap { dict in
+            allMemories = memories
+        } else if let wrapped = try? JSONDecoder().decode(MemoriesResponse.self, from: data) {
+            allMemories = wrapped.memories ?? []
+        } else if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let arr = json["memories"] as? [[String: Any]] {
+            allMemories = arr.compactMap { dict in
                 guard let content = dict["content"] as? String else { return nil }
                 return Memory(
                     content: content,
@@ -130,7 +134,16 @@ actor SentienceAPI {
             }
         }
 
-        return []
+        // Filter out already-seen memories (dedup by id/content hash)
+        let newMemories = allMemories.filter { !seenIds.contains($0.dedupKey) }
+        newMemories.forEach { seenIds.insert($0.dedupKey) }
+
+        // Cap seenIds size to avoid unbounded growth (keep last 500)
+        if seenIds.count > 500 {
+            seenIds = Set(seenIds.dropFirst(seenIds.count - 500))
+        }
+
+        return newMemories
     }
 }
 
