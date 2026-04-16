@@ -104,17 +104,8 @@ actor SentienceAPI {
         let (data, response) = try await URLSession.shared.data(for: request)
 
         if let http = response as? HTTPURLResponse {
-            if http.statusCode == 401 || http.statusCode == 403 {
-                throw APIError.authError
-            }
-            if http.statusCode != 200 {
-                throw APIError.httpError(http.statusCode)
-            }
-        }
-
-        // Log raw response for debugging (first 500 chars)
-        if let raw = String(data: data, encoding: .utf8) {
-            print("RAW API RESPONSE: \(String(raw.prefix(500)))")
+            if http.statusCode == 401 || http.statusCode == 403 { throw APIError.authError }
+            if http.statusCode != 200 { throw APIError.httpError(http.statusCode) }
         }
 
         // Try array first, then wrapped object
