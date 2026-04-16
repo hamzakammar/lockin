@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hamza.lockin</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- UPDATE THIS PATH after building -->
+        <string>/usr/local/bin/LockIn</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>LOCKIN_API_KEY</key>
+        <string>YOUR_SENTIENCE_API_KEY_HERE</string>
+        <!-- Optional: set a deadline for today e.g. 4pm exam -->
+        <!-- <key>LOCKIN_DEADLINE</key> -->
+        <!-- <string>2025-04-16T16:00:00</string> -->
+    </dict>
+
+    <!-- Run at login -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Keep running if it crashes -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Logs -->
+    <key>StandardOutPath</key>
+    <string>/tmp/lockin.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/lockin.stderr.log</string>
+</dict>
+</plist>
