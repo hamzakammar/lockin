@@ -112,12 +112,17 @@ actor SentienceAPI {
             }
         }
 
+        // Log raw response for debugging (first 500 chars)
+        if let raw = String(data: data, encoding: .utf8) {
+            print("RAW API RESPONSE: \(String(raw.prefix(500)))")
+        }
+
         // Try array first, then wrapped object
         if let memories = try? JSONDecoder().decode([Memory].self, from: data) {
-            return memories.filter { $0.source == "screenshot" || $0.source == nil }
+            return memories  // return all memory types, detector filters by content
         }
         if let wrapped = try? JSONDecoder().decode(MemoriesResponse.self, from: data) {
-            return (wrapped.memories ?? []).filter { $0.source == "screenshot" || $0.source == nil }
+            return (wrapped.memories ?? [])  // return all memory types
         }
 
         // Maybe it's {"memories": [...]} with different shape - try raw JSON
