@@ -78,9 +78,9 @@ enum APIError: Error {
 actor SentienceAPI {
     private let baseURL = "https://audiosummarizer-production.up.railway.app"
 
-    func fetchRecentScreenshots(minutes: Int = 5) async throws -> [Memory] {
+    func fetchRecentScreenshots() async throws -> [Memory] {
         let end = Date()
-        let start = end.addingTimeInterval(TimeInterval(-minutes * 60))
+        let start = end.addingTimeInterval(-Config.pollIntervalSeconds)
 
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
@@ -449,7 +449,7 @@ class LockInMonitor: NSObject {
         guard !paused else { return }
 
         do {
-            let memories = try await api.fetchRecentScreenshots(minutes: 5)
+            let memories = try await api.fetchRecentScreenshots()
             await logger.log("Fetched \(memories.count) memories")
 
             guard !memories.isEmpty else {
