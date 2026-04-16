@@ -1,6 +1,5 @@
 import Foundation
 import AppKit
-import UserNotifications
 
 // ─────────────────────────────────────────────
 // MARK: - Config
@@ -235,39 +234,43 @@ actor Logger {
 
 // ─────────────────────────────────────────────
 // MARK: - Notification Manager
+// Uses osascript — works for bare binaries, no bundle required
 // ─────────────────────────────────────────────
 
 actor NotificationManager {
     private var lastNotificationTime: Date = .distantPast
-    private let minInterval: TimeInterval = 60  // don't spam more than once per minute
+    private let minInterval: TimeInterval = 60
 
     func requestPermission() async {
-        let center = UNUserNotificationCenter.current()
-        _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
+        // No-op for osascript approach — no permission needed
     }
 
     func send(title: String, body: String, sound: Bool = true) async {
         let now = Date()
         guard now.timeIntervalSince(lastNotificationTime) >= minInterval else { return }
         lastNotificationTime = now
-
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        if sound { content.sound = .default }
-        content.interruptionLevel = .timeSensitive
-
-        let request = UNNotificationRequest(
-            identifier: UUID().uuidString,
-            content: content,
-            trigger: nil  // deliver immediately
-        )
-        try? await UNUserNotificationCenter.current().add(request)
+        await deliver(title: title, body: body, sound: sound)
     }
 
     func sendEscalated(title: String, body: String) async {
-        lastNotificationTime = .distantPast  // bypass rate limit for escalation
-        await send(title: title, body: body, sound: true)
+        lastNotificationTime = .distantPast  // bypass rate limit
+        await deliver(title: title, body: body, sound: true)
+    }
+
+    private func deliver(title: String, body: String, sound: Bool) async {
+        // Escape quotes for AppleScript
+        let safeTitle = title.replacingOccurrences(of: "\"", with: "'")
+        let safeBody  = body.replacingOccurrences(of: "\"", with: "'")
+        let soundPart = sound ? " sound name \"Basso\"" : ""
+        let script = "display notification \"\(safeBody)\" with title \"\(safeTitle)\"\(soundPart)"
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e", script]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError  = FileHandle.nullDevice
+        try? task.run()
+        task.waitUntilExit()
     }
 }
 
