@@ -192,6 +192,7 @@ struct Detector {
 
             for keyword in Config.procrastinationKeywords {
                 if description.contains(keyword) {
+                    print("FLAGGED: activity=\(activity) | keyword=\(keyword) | desc=\(description.prefix(120))")
                     badCount += 1
                     if detectedApp == nil {
                         detectedApp = canonicalName(keyword: keyword)
