@@ -133,33 +133,29 @@ struct DetectionResult {
 }
 
 struct Detector {
-    private func field(_ label: String, in content: String, endingBefore next: String? = nil) -> String? {
-        guard let r = content.range(of: "\(label):", options: .caseInsensitive) else { return nil }
-        let after = content[r.upperBound...].trimmingCharacters(in: .whitespaces)
-        if let nxt = next, let nr = after.range(of: "\(nxt):", options: .caseInsensitive) {
-            return String(after[..<nr.lowerBound]).trimmingCharacters(in: .whitespaces)
-        }
-        return String(after)
-    }
-
     func analyze(_ memories: [Memory]) -> DetectionResult {
         guard !memories.isEmpty else {
             return DetectionResult(isProcrastinating: false, detectedApp: "", confidence: 0)
         }
-        let badActivities: Set<String> = ["entertainment", "social media", "social networking"]
+
+        let badCategories: Set<String> = ["entertainment", "social media", "social networking", "leisure"]
         var bad = 0
         var appName = ""
 
         for m in memories {
-            // Dump first 200 chars of each memory for debugging
-            print("RAW: \(m.content.prefix(200))")
-            guard let activity = field("Activity", in: m.content, endingBefore: "Description")?
-                    .lowercased() else { continue }
-            print("MEMORY activity=[\(activity)]")
-            guard badActivities.contains(where: { activity.contains($0) }) else { continue }
+            guard let data = m.content.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let category = (json["category"] as? String)?.lowercased() else { continue }
+
+            guard badCategories.contains(where: { category.contains($0) }) else { continue }
             bad += 1
-            if appName.isEmpty, let desc = field("Description", in: m.content) {
-                appName = extractApp(from: desc.lowercased()) ?? "a distraction"
+
+            // Extract content name from first action object
+            if appName.isEmpty,
+               let facts = json["facts"] as? [String: Any],
+               let actions = facts["actions"] as? [[String: Any]],
+               let obj = actions.first?["object"] as? String {
+                appName = extractApp(from: obj.lowercased()) ?? obj
             }
         }
 
@@ -170,7 +166,7 @@ struct Detector {
         )
     }
 
-    private func extractApp(from desc: String) -> String? {
+    private func extractApp(from text: String) -> String? {
         let apps: [(String, String)] = [
             ("instagram","Instagram"), ("tiktok","TikTok"), ("reddit","Reddit"),
             ("twitter","Twitter"), ("x.com","Twitter/X"), ("linkedin","LinkedIn"),
@@ -179,7 +175,7 @@ struct Detector {
             ("apple tv","Apple TV"), ("youtube shorts","YouTube Shorts"),
             ("youtube","YouTube"), ("spotify","Spotify"),
         ]
-        for (k, v) in apps { if desc.contains(k) { return v } }
+        for (k, v) in apps { if text.contains(k) { return v } }
         return nil
     }
 }
