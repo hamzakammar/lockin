@@ -101,14 +101,13 @@ mkdir -p "$DMG_STAGING"
 mkdir -p "$BACKGROUND_DIR"
 
 # Generate a clean background image (dark gradient)
-# Generate DMG background with Python
+# Generate clean white DMG background with arrow
 BACKGROUND_DIR="$BACKGROUND_DIR" python3 - << 'PYEOF2'
 import struct, zlib, os
 
 W, H = 540, 380
 
-# --- minimal PNG writer ---
-def make_png(pixels):  # pixels: list of (r,g,b) rows
+def make_png(pixels):
     def chunk(t, d):
         return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
     rows = b"".join(b"\x00" + b"".join(struct.pack("BBB", *px) for px in row) for row in pixels)
@@ -117,62 +116,29 @@ def make_png(pixels):  # pixels: list of (r,g,b) rows
             + chunk(b"IDAT", zlib.compress(rows, 9))
             + chunk(b"IEND", b""))
 
-# --- draw a pixel ---
-bg = [[(247, 247, 247)] * W for _ in range(H)]
+bg = [[(255, 255, 255)] * W for _ in range(H)]
 
-def set_px(x, y, rgb):
+def px(x, y, rgb):
     if 0 <= x < W and 0 <= y < H:
         bg[y][x] = rgb
 
-GRAY = (150, 150, 150)
-DARK = (60, 60, 60)
+GRAY = (160, 160, 160)
 
-# --- draw horizontal arrow line from x=235 to x=295, y=185 ---
-for x in range(235, 300):
-    set_px(x, 185, GRAY)
+# Arrow shaft: x=235 to x=298, y=185
+for x in range(235, 299):
+    for t in range(-1, 2):
+        px(x, 185 + t, GRAY)
 
-# arrowhead at x=300
-for i in range(8):
-    for j in range(-i, i+1):
-        set_px(300 + i, 185 + j, GRAY)
-
-# --- bitmap font: 5x7 digits/letters for "Drag to Applications to install" ---
-# Use a simple dot-matrix approach for the label
-FONT5 = {
-    "D": [0x1E,0x11,0x11,0x11,0x1E], "r": [0x00,0x16,0x19,0x10,0x10],
-    "a": [0x00,0x0E,0x09,0x0F,0x0B], "g": [0x00,0x0F,0x11,0x0F,0x01],
-    " ": [0x00,0x00,0x00,0x00,0x00], "t": [0x08,0x1C,0x08,0x08,0x07],
-    "o": [0x00,0x0E,0x11,0x11,0x0E], "A": [0x0E,0x11,0x1F,0x11,0x11],
-    "p": [0x00,0x1E,0x11,0x1E,0x10], "l": [0x18,0x08,0x08,0x08,0x1C],
-    "i": [0x08,0x00,0x18,0x08,0x1C], "c": [0x00,0x0E,0x10,0x10,0x0E],
-    "n": [0x00,0x16,0x19,0x11,0x11], "s": [0x00,0x0F,0x18,0x06,0x1F],
-    "I": [0x1C,0x08,0x08,0x08,0x1C], "h": [0x10,0x1E,0x11,0x11,0x11],
-    "e": [0x00,0x0E,0x1F,0x10,0x0E], "f": [0x06,0x08,0x1C,0x08,0x08],
-}
-
-def draw_text(text, x0, y0, color=DARK, scale=1):
-    x = x0
-    for ch in text:
-        cols = FONT5.get(ch, FONT5[" "])
-        for ci, col in enumerate(cols):
-            for row in range(7):
-                if col & (1 << (6 - row)):
-                    for sx in range(scale):
-                        for sy in range(scale):
-                            set_px(x + ci*scale + sx, y0 + row*scale + sy, color)
-        x += (len(cols) + 1) * scale
-
-label = "Drag to Applications to install"
-text_w = len(label) * 6 * 1
-text_x = (W - text_w) // 2
-draw_text(label, text_x, 218, DARK, 1)
+# Arrowhead triangle pointing right at x=299
+for i in range(12):
+    for j in range(-(i), i+1):
+        px(299 + i, 185 + j, GRAY)
 
 out = os.environ["BACKGROUND_DIR"] + "/bg.png"
 with open(out, "wb") as f:
     f.write(make_png(bg))
 print("Background generated")
 PYEOF2
-echo "Background generated" 
 
 # Create a writable DMG, set layout with AppleScript, then convert to compressed
 hdiutil create -size 80m -fs HFS+ -volname "$APP_NAME" "$DMG_TMP" -quiet
