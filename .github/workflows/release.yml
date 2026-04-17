@@ -51,6 +51,7 @@ jobs:
           cd /tmp/homebrew-tap
           git config user.email "ci@github.com"
           git config user.name "GitHub Actions"
+          git remote set-url origin https://hamzakammar:$TAP_TOKEN@github.com/hamzakammar/homebrew-tap.git
 
           # Update version and sha256 in cask (BSD sed on macOS runner)
           sed -i '' "s/version \".*\"/version \"$VERSION\"/" Casks/lockin.rb
