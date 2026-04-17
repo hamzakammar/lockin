@@ -77,7 +77,7 @@ actor SentienceAPI {
     private let baseURL = "https://audiosummarizer-production.up.railway.app"
     private var seenIds: Set<String> = []
 
-    func fetchRecent() async throws -> [Memory] {
+    func fetchRecent() async throws -> (all: [Memory], fresh: [Memory]) {
         let end   = Date()
         let start = end.addingTimeInterval(-10 * 60)
         let fmt   = ISO8601DateFormatter()
@@ -114,9 +114,11 @@ actor SentienceAPI {
             }
         }
 
-        // Return ALL memories in window for detection — no dedup.
-        // Detection needs to know what's happening right now, not just new events.
-        return all
+        // fresh = new events for logging; all = full window for detection
+        let fresh = all.filter { !seenIds.contains($0.dedupKey) }
+        fresh.forEach { seenIds.insert($0.dedupKey) }
+        if seenIds.count > 500 { seenIds = Set(seenIds.dropFirst(seenIds.count - 500)) }
+        return (all: all, fresh: fresh)
     }
 
     func resetSeen() { seenIds = [] }
@@ -667,14 +669,15 @@ class LockInMonitor: NSObject {
         if case .paused = state { return }
 
         do {
-            let memories = try await api.fetchRecent()
+            let (allMemories, freshMemories) = try await api.fetchRecent()
             lastPollTime = Date()
-            lastPollCount = memories.count
+            lastPollCount = freshMemories.count
             updateLastPollLabel()
             updateDeadlineLabel()
-            await logger.log("Fetched \(memories.count) new memories")
+            await logger.log("Fetched \(freshMemories.count) new memories (\(allMemories.count) in window)")
 
-            let result = detector.analyze(memories)
+            // Detect on full window — are we procrastinating RIGHT NOW?
+            let result = detector.analyze(allMemories)
             if result.isProcrastinating {
                 await handleProcrastination(app: result.detectedApp)
             } else {
