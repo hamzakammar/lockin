@@ -13,7 +13,7 @@ class Settings: ObservableObject {
 
     var apiKey: String        { get { val("LOCKIN_API_KEY") ?? "" }        set { set("LOCKIN_API_KEY", newValue) } }
     var pollInterval: Double  { get { Double(val("POLL_INTERVAL") ?? "") ?? 150 } set { set("POLL_INTERVAL", String(Int(newValue))) } }
-    var threshold: Int        { get { Int(val("THRESHOLD") ?? "") ?? 2 }   set { set("THRESHOLD", String(newValue)) } }
+    var threshold: Int        { get { Int(val("THRESHOLD") ?? "") ?? 1 }   set { set("THRESHOLD", String(newValue)) } }
     var logPath: String       { (NSHomeDirectory() as NSString).appendingPathComponent("Library/Logs/LockIn/procrastination.log") }
 
     private var cache: [String: String] = [:]
