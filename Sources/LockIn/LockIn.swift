@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import ServiceManagement
 
 // ─────────────────────────────────────────────
 // MARK: - Persistent Settings
@@ -509,6 +510,12 @@ class LockInMonitor: NSObject {
         self.pauseMenuItem = pause
         menu.addItem(pause)
 
+        // Launch at login
+        let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        launchItem.target = self
+        launchItem.state = isLaunchAtLoginEnabled() ? .on : .off
+        menu.addItem(launchItem)
+
         // Settings
         let settings = NSMenuItem(title: "⚙️ Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settings.target = self
@@ -601,6 +608,33 @@ class LockInMonitor: NSObject {
         let h = Int(rem)/3600, m = (Int(rem)%3600)/60
         let fmt = DateFormatter(); fmt.timeStyle = .short; fmt.dateStyle = .none
         deadlineMenuItem?.title = "⏱ \(fmt.string(from: d)) — \(h)h \(m)m left"
+    }
+
+    private func isLaunchAtLoginEnabled() -> Bool {
+        if #available(macOS 13.0, *) {
+            return SMAppService.mainApp.status == .enabled
+        }
+        return false
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        if #available(macOS 13.0, *) {
+            do {
+                if SMAppService.mainApp.status == .enabled {
+                    try SMAppService.mainApp.unregister()
+                } else {
+                    try SMAppService.mainApp.register()
+                }
+                // Update checkmark
+                if let menu = statusItem?.menu {
+                    for item in menu.items where item.action == #selector(toggleLaunchAtLogin) {
+                        item.state = isLaunchAtLoginEnabled() ? .on : .off
+                    }
+                }
+            } catch {
+                Task { await logger.log("Launch at login error: \(error)") }
+            }
+        }
     }
 
     @objc private func openSettings() {
