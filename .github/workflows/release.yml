@@ -43,20 +43,18 @@ jobs:
 
       - name: Update Homebrew tap
         env:
-          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
           VERSION: ${{ steps.version.outputs.VERSION }}
           SHA256: ${{ steps.sha.outputs.SHA256 }}
         run: |
-          git clone https://hamzakammar:$TAP_TOKEN@github.com/hamzakammar/homebrew-tap.git /tmp/homebrew-tap
+          gh repo clone hamzakammar/homebrew-tap /tmp/homebrew-tap
           cd /tmp/homebrew-tap
           git config user.email "ci@github.com"
           git config user.name "GitHub Actions"
-          git remote set-url origin https://hamzakammar:$TAP_TOKEN@github.com/hamzakammar/homebrew-tap.git
 
-          # Update version and sha256 in cask (BSD sed on macOS runner)
           sed -i '' "s/version \".*\"/version \"$VERSION\"/" Casks/lockin.rb
           sed -i '' "s/sha256 \".*\"/sha256 \"$SHA256\"/" Casks/lockin.rb
 
           git add Casks/lockin.rb
           git commit -m "chore: update lockin to v$VERSION"
-          git push
+          gh repo sync hamzakammar/homebrew-tap --source /tmp/homebrew-tap || git push
