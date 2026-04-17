@@ -101,54 +101,77 @@ mkdir -p "$DMG_STAGING"
 mkdir -p "$BACKGROUND_DIR"
 
 # Generate a clean background image (dark gradient)
-# Generate DMG background using osascript + Cocoa
-osascript << 'APPLESCRIPT_BG'
-use framework "AppKit"
-use framework "Foundation"
-use scripting additions
+# Generate DMG background with Python
+BACKGROUND_DIR="$BACKGROUND_DIR" python3 - << 'PYEOF2'
+import struct, zlib, os
 
-set W to 540
-set H to 380
-set outPath to (system attribute "BACKGROUND_DIR") & "/bg.png"
+W, H = 540, 380
 
--- Create bitmap
-set bmp to current application's NSBitmapImageRep's alloc()'s initWithBitmapDataPlanes:(missing value) pixelsWide:W pixelsHigh:H bitsPerSample:8 samplesPerPixel:4 hasAlpha:true isPlanar:false colorSpaceName:(current application's NSCalibratedRGBColorSpace) bytesPerRow:0 bitsPerPixel:0
+# --- minimal PNG writer ---
+def make_png(pixels):  # pixels: list of (r,g,b) rows
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    rows = b"".join(b"\x00" + b"".join(struct.pack("BBB", *px) for px in row) for row in pixels)
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows, 9))
+            + chunk(b"IEND", b""))
 
-set ctx to current application's NSGraphicsContext's graphicsContextWithBitmapImageRep:bmp
-current application's NSGraphicsContext's setCurrentContext:ctx
+# --- draw a pixel ---
+bg = [[(247, 247, 247)] * W for _ in range(H)]
 
--- White background
-set bgColor to current application's NSColor's colorWithRed:0.97 green:0.97 blue:0.97 alpha:1.0
-bgColor's setFill()
-current application's NSRectFill({x:0, y:0, |width|:W, |height|:H})
+def set_px(x, y, rgb):
+    if 0 <= x < W and 0 <= y < H:
+        bg[y][x] = rgb
 
--- Drag arrow (→) between app icon and Applications folder
--- App icon center: x=160, Applications center: x=380, y=195 from bottom
-set arrowColor to current application's NSColor's colorWithRed:0.5 green:0.5 blue:0.5 alpha:0.8
-arrowColor's set()
-set arrowFont to current application's NSFont's systemFontOfSize:40
-set arrowAttrs to current application's NSDictionary's dictionaryWithObjects:{arrowFont, arrowColor} forKeys:{current application's NSFontAttributeName, current application's NSForegroundColorAttributeName}
-set arrowStr to current application's NSAttributedString's alloc()'s initWithString:"→" attributes:arrowAttrs
-set arrowSize to arrowStr's |size|()
-set arrowX to (W / 2) - ((arrowSize's |width|()) / 2)
-set arrowY to 175
-arrowStr's drawAtPoint:{arrowX, arrowY}
+GRAY = (150, 150, 150)
+DARK = (60, 60, 60)
 
--- Label: "Drag to install"
-set labelColor to current application's NSColor's colorWithRed:0.4 green:0.4 blue:0.4 alpha:1.0
-set labelFont to current application's NSFont's systemFontOfSize:12
-set labelAttrs to current application's NSDictionary's dictionaryWithObjects:{labelFont, labelColor} forKeys:{current application's NSFontAttributeName, current application's NSForegroundColorAttributeName}
-set labelStr to current application's NSAttributedString's alloc()'s initWithString:"Drag to Applications to install" attributes:labelAttrs
-set labelSize to labelStr's |size|()
-set labelX to (W / 2) - ((labelSize's |width|()) / 2)
-labelStr's drawAtPoint:{labelX, 140}
+# --- draw horizontal arrow line from x=235 to x=295, y=185 ---
+for x in range(235, 300):
+    set_px(x, 185, GRAY)
 
-ctx's flushGraphics()
+# arrowhead at x=300
+for i in range(8):
+    for j in range(-i, i+1):
+        set_px(300 + i, 185 + j, GRAY)
 
--- Save as PNG
-set pngData to bmp's representationUsingType:(current application's NSBitmapImageFileTypePNG) |properties|:(missing value)
-pngData's writeToFile:(outPath) atomically:true
-APPLESCRIPT_BG
+# --- bitmap font: 5x7 digits/letters for "Drag to Applications to install" ---
+# Use a simple dot-matrix approach for the label
+FONT5 = {
+    "D": [0x1E,0x11,0x11,0x11,0x1E], "r": [0x00,0x16,0x19,0x10,0x10],
+    "a": [0x00,0x0E,0x09,0x0F,0x0B], "g": [0x00,0x0F,0x11,0x0F,0x01],
+    " ": [0x00,0x00,0x00,0x00,0x00], "t": [0x08,0x1C,0x08,0x08,0x07],
+    "o": [0x00,0x0E,0x11,0x11,0x0E], "A": [0x0E,0x11,0x1F,0x11,0x11],
+    "p": [0x00,0x1E,0x11,0x1E,0x10], "l": [0x18,0x08,0x08,0x08,0x1C],
+    "i": [0x08,0x00,0x18,0x08,0x1C], "c": [0x00,0x0E,0x10,0x10,0x0E],
+    "n": [0x00,0x16,0x19,0x11,0x11], "s": [0x00,0x0F,0x18,0x06,0x1F],
+    "I": [0x1C,0x08,0x08,0x08,0x1C], "h": [0x10,0x1E,0x11,0x11,0x11],
+    "e": [0x00,0x0E,0x1F,0x10,0x0E], "f": [0x06,0x08,0x1C,0x08,0x08],
+}
+
+def draw_text(text, x0, y0, color=DARK, scale=1):
+    x = x0
+    for ch in text:
+        cols = FONT5.get(ch, FONT5[" "])
+        for ci, col in enumerate(cols):
+            for row in range(7):
+                if col & (1 << (6 - row)):
+                    for sx in range(scale):
+                        for sy in range(scale):
+                            set_px(x + ci*scale + sx, y0 + row*scale + sy, color)
+        x += (len(cols) + 1) * scale
+
+label = "Drag to Applications to install"
+text_w = len(label) * 6 * 1
+text_x = (W - text_w) // 2
+draw_text(label, text_x, 218, DARK, 1)
+
+out = os.environ["BACKGROUND_DIR"] + "/bg.png"
+with open(out, "wb") as f:
+    f.write(make_png(bg))
+print("Background generated")
+PYEOF2
 echo "Background generated" 
 
 # Create a writable DMG, set layout with AppleScript, then convert to compressed
