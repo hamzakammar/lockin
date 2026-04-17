@@ -20,17 +20,42 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
-      - name: Build DMG
+      - name: Build zip
         run: bash build.sh ${{ steps.version.outputs.VERSION }}
+
+      - name: Compute SHA256
+        id: sha
+        run: |
+          SHA=$(shasum -a 256 dist/LockIn-${{ steps.version.outputs.VERSION }}.zip | awk '{print $1}')
+          echo "SHA256=$SHA" >> $GITHUB_OUTPUT
 
       - name: Upload to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           name: LockIn v${{ steps.version.outputs.VERSION }}
           tag_name: ${{ github.ref_name }}
-          files: dist/LockIn-${{ steps.version.outputs.VERSION }}.dmg
+          files: dist/LockIn-${{ steps.version.outputs.VERSION }}.zip
           generate_release_notes: true
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          SHA256: ${{ steps.sha.outputs.SHA256 }}
+        run: |
+          git clone https://hamzakammar:$TAP_TOKEN@github.com/hamzakammar/homebrew-tap.git /tmp/homebrew-tap
+          cd /tmp/homebrew-tap
+          git config user.email "ci@github.com"
+          git config user.name "GitHub Actions"
+
+          # Update version and sha256 in cask
+          sed -i '' "s/version \".*\"/version \"$VERSION\"/" Casks/lockin.rb
+          sed -i '' "s/sha256 \".*\"/sha256 \"$SHA256\"/" Casks/lockin.rb
+
+          git add Casks/lockin.rb
+          git commit -m "chore: update lockin to v$VERSION"
+          git push

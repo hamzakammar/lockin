@@ -25,7 +25,6 @@ rm -rf "$DIST_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
 
-# Copy binary
 cp "$BINARY" "$APP_DIR/Contents/MacOS/$APP_NAME"
 
 # ── 3. Write Info.plist ──
@@ -66,7 +65,7 @@ EOF
 
 echo "✅ App bundle created"
 
-# ── 4. App icon (if icon.png exists in repo root) ──
+# ── 4. App icon ──
 if [ -f "icon.png" ]; then
   echo "🎨 Generating iconset..."
   ICONSET="$APP_DIR/Contents/Resources/AppIcon.iconset"
@@ -78,8 +77,6 @@ if [ -f "icon.png" ]; then
   done
   iconutil -c icns "$ICONSET" -o "$APP_DIR/Contents/Resources/AppIcon.icns" 2>/dev/null && \
     rm -rf "$ICONSET" && echo "✅ Icon generated" || echo "⚠️  Icon generation failed (skipping)"
-else
-  echo "⚠️  No icon.png found — app will use default icon. Add a 512x512 icon.png to the repo root."
 fi
 
 # ── 5. Ad-hoc code sign ──
@@ -89,105 +86,11 @@ codesign --force --deep --sign - \
   "$APP_DIR"
 echo "✅ Signed (ad-hoc)"
 
-# ── 6. Create DMG ──
-echo "📦 Creating DMG..."
-
-DMG_STAGING="$DIST_DIR/dmg_staging"
-DMG_PATH="$DIST_DIR/$APP_NAME-$VERSION.dmg"
-DMG_TMP="$DIST_DIR/$APP_NAME-$VERSION-tmp.dmg"
-BACKGROUND_DIR="$DMG_STAGING/.background"
-
-mkdir -p "$DMG_STAGING"
-mkdir -p "$BACKGROUND_DIR"
-
-# Generate a clean background image (dark gradient)
-# Generate clean white DMG background with arrow
-BACKGROUND_DIR="$BACKGROUND_DIR" python3 - << 'PYEOF2'
-import struct, zlib, os
-
-W, H = 540, 380
-
-def make_png(pixels):
-    def chunk(t, d):
-        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
-    rows = b"".join(b"\x00" + b"".join(struct.pack("BBB", *px) for px in row) for row in pixels)
-    return (b"\x89PNG\r\n\x1a\n"
-            + chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0))
-            + chunk(b"IDAT", zlib.compress(rows, 9))
-            + chunk(b"IEND", b""))
-
-bg = [[(255, 255, 255)] * W for _ in range(H)]
-
-def px(x, y, rgb):
-    if 0 <= x < W and 0 <= y < H:
-        bg[y][x] = rgb
-
-GRAY = (160, 160, 160)
-
-# Arrow shaft: x=235 to x=298, y=185
-for x in range(235, 299):
-    for t in range(-1, 2):
-        px(x, 185 + t, GRAY)
-
-# Arrowhead triangle pointing right at x=299
-for i in range(12):
-    for j in range(-(i), i+1):
-        px(299 + i, 185 + j, GRAY)
-
-out = os.environ["BACKGROUND_DIR"] + "/bg.png"
-with open(out, "wb") as f:
-    f.write(make_png(bg))
-print("Background generated")
-PYEOF2
-
-# Create a writable DMG, set layout with AppleScript, then convert to compressed
-hdiutil create -size 80m -fs HFS+ -volname "$APP_NAME" "$DMG_TMP" -quiet
-MOUNT_OUTPUT=$(hdiutil attach "$DMG_TMP" -readwrite -noverify -noautoopen)
-DEVICE=$(echo "$MOUNT_OUTPUT" | grep "Apple_HFS" | awk '{print $1}')
-VOLUME="/Volumes/$APP_NAME"
-
-# Copy files
-cp -r "$APP_DIR" "$VOLUME/"
-ln -sf /Applications "$VOLUME/Applications"
-mkdir -p "$VOLUME/.background"
-cp "$BACKGROUND_DIR/bg.png" "$VOLUME/.background/bg.png"
-
-# AppleScript to set window size, icon positions, background, hide toolbar
-osascript << APPLESCRIPT
-tell application "Finder"
-  tell disk "$APP_NAME"
-    open
-    set current view of container window to icon view
-    set toolbar visible of container window to false
-    set statusbar visible of container window to false
-    set bounds of container window to {200, 200, 740, 580}
-    set theViewOptions to the icon view options of container window
-    set arrangement of theViewOptions to not arranged
-    set icon size of theViewOptions to 96
-    set background picture of theViewOptions to file ".background:bg.png"
-    set position of item "$APP_NAME.app" to {160, 185}
-    set position of item "Applications" to {380, 185}
-    close
-    open
-    update without registering applications
-    delay 2
-    close
-  end tell
-end tell
-APPLESCRIPT
-
-# Bless and detach
-chmod -Rf go-w "$VOLUME/.background"
-hdiutil detach "$DEVICE" -quiet
-
-# Convert to compressed, read-only
-hdiutil convert "$DMG_TMP" -format UDZO -imagekey zlib-level=9 -o "$DMG_PATH" -quiet
-rm -f "$DMG_TMP"
-rm -rf "$DMG_STAGING"
-
-echo ""
+# ── 6. Zip for Homebrew ──
+echo "📦 Creating zip..."
+ZIP_PATH="$DIST_DIR/$APP_NAME-$VERSION.zip"
+cd "$DIST_DIR"
+zip -qr "$APP_NAME-$VERSION.zip" "$APP_NAME.app"
+cd ..
 echo "✅ Done!"
-echo "📦 DMG: $DMG_PATH"
-echo ""
-echo "To install: open $DMG_PATH, drag LockIn to Applications."
-echo "First launch: right-click → Open (Gatekeeper bypass, one-time only)."
+echo "📦 Zip: $ZIP_PATH"

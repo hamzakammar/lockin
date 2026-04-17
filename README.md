@@ -2,18 +2,17 @@
 
 macOS menubar agent that watches your [Sentience](https://sentience.com) screen memories and notifies you when you're procrastinating.
 
-[![Download](https://img.shields.io/github/v/release/hamzakammar/lockin?label=⬇%20Download%20for%20macOS&style=for-the-badge&color=black&logo=apple)](https://github.com/hamzakammar/lockin/releases/latest)
-
 > Requires macOS 13+ and [Sentience](https://sentience.com) with screen capture enabled.
 
 ---
 
 ## Install
 
-1. Download `LockIn.dmg` from the link above
-2. Open it, drag **LockIn** into **Applications**
-3. Right-click → **Open** the first time (one-time Gatekeeper bypass)
-4. Click the 🟢 in your menubar → **⚙️ Settings** → paste your Sentience API key → Save
+```bash
+brew install --cask hamzakammar/tap/lockin
+```
+
+Then click the 🟢 in your menubar → **⚙️ Settings** → paste your Sentience API key → Save.
 
 That's it. LockIn runs in the background and monitors your screen activity automatically.
 
