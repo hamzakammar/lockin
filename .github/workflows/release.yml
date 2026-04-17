@@ -52,9 +52,9 @@ jobs:
           git config user.email "ci@github.com"
           git config user.name "GitHub Actions"
 
-          # Update version and sha256 in cask (GNU sed on CI)
-          sed -i "s/version \".*\"/version \"$VERSION\"/" Casks/lockin.rb
-          sed -i "s/sha256 \".*\"/sha256 \"$SHA256\"/" Casks/lockin.rb
+          # Update version and sha256 in cask (BSD sed on macOS runner)
+          sed -i '' "s/version \".*\"/version \"$VERSION\"/" Casks/lockin.rb
+          sed -i '' "s/sha256 \".*\"/sha256 \"$SHA256\"/" Casks/lockin.rb
 
           git add Casks/lockin.rb
           git commit -m "chore: update lockin to v$VERSION"
