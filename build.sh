@@ -91,20 +91,98 @@ echo "✅ Signed (ad-hoc)"
 
 # ── 6. Create DMG ──
 echo "📦 Creating DMG..."
+
 DMG_STAGING="$DIST_DIR/dmg_staging"
-mkdir -p "$DMG_STAGING"
-cp -r "$APP_DIR" "$DMG_STAGING/"
-ln -sf /Applications "$DMG_STAGING/Applications"
-
 DMG_PATH="$DIST_DIR/$APP_NAME-$VERSION.dmg"
+DMG_TMP="$DIST_DIR/$APP_NAME-$VERSION-tmp.dmg"
+BACKGROUND_DIR="$DMG_STAGING/.background"
 
-hdiutil create \
-  -volname "$APP_NAME $VERSION" \
-  -srcfolder "$DMG_STAGING" \
-  -ov \
-  -format UDZO \
-  "$DMG_PATH" > /dev/null
+mkdir -p "$DMG_STAGING"
+mkdir -p "$BACKGROUND_DIR"
 
+# Generate a clean background image (dark gradient)
+BACKGROUND_DIR="$BACKGROUND_DIR" python3 - << 'PYEOF'
+import struct, zlib, os
+
+def make_png(width, height, pixels_fn):
+    """Minimal PNG writer"""
+    def chunk(tag, data):
+        c = zlib.crc32(tag + data) & 0xffffffff
+        return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', c)
+
+    rows = []
+    for y in range(height):
+        row = b'\x00'  # filter type None
+        for x in range(width):
+            row += bytes(pixels_fn(x, y, width, height))
+        rows.append(row)
+
+    raw = b''.join(rows)
+    compressed = zlib.compress(raw, 9)
+    ihdr_data = struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)
+    png = b'\x89PNG\r\n\x1a\n'
+    png += chunk(b'IHDR', ihdr_data)
+    png += chunk(b'IDAT', compressed)
+    png += chunk(b'IEND', b'')
+    return png
+
+def bg_pixel(x, y, w, h):
+    # Dark gradient: top #1a1a2e → bottom #16213e
+    t = y / h
+    r = int(26  + (22  - 26)  * t)
+    g = int(26  + (33  - 26)  * t)
+    b = int(46  + (62  - 46)  * t)
+    return (r, g, b)
+
+png = make_png(540, 380, bg_pixel)
+with open(os.environ['BACKGROUND_DIR'] + '/bg.png', 'wb') as f:
+    f.write(png)
+print("Background generated")
+PYEOF
+
+# Create a writable DMG, set layout with AppleScript, then convert to compressed
+hdiutil create -size 80m -fs HFS+ -volname "$APP_NAME" "$DMG_TMP" -quiet
+MOUNT_OUTPUT=$(hdiutil attach "$DMG_TMP" -readwrite -noverify -noautoopen)
+DEVICE=$(echo "$MOUNT_OUTPUT" | grep "Apple_HFS" | awk '{print $1}')
+VOLUME="/Volumes/$APP_NAME"
+
+# Copy files
+cp -r "$APP_DIR" "$VOLUME/"
+ln -sf /Applications "$VOLUME/Applications"
+mkdir -p "$VOLUME/.background"
+cp "$BACKGROUND_DIR/bg.png" "$VOLUME/.background/bg.png"
+
+# AppleScript to set window size, icon positions, background, hide toolbar
+osascript << APPLESCRIPT
+tell application "Finder"
+  tell disk "$APP_NAME"
+    open
+    set current view of container window to icon view
+    set toolbar visible of container window to false
+    set statusbar visible of container window to false
+    set bounds of container window to {200, 200, 740, 580}
+    set theViewOptions to the icon view options of container window
+    set arrangement of theViewOptions to not arranged
+    set icon size of theViewOptions to 96
+    set background picture of theViewOptions to file ".background:bg.png"
+    set position of item "$APP_NAME.app" to {160, 185}
+    set position of item "Applications" to {380, 185}
+    close
+    open
+    update without registering applications
+    delay 2
+    close
+  end tell
+end tell
+APPLESCRIPT
+
+# Bless and detach
+chmod -Rf go-w "$VOLUME/.background"
+hdiutil detach "$DEVICE" -quiet
+
+# Convert to compressed, read-only
+hdiutil convert "$DMG_TMP" -format UDZO -imagekey zlib-level=9 -o "$DMG_PATH" -quiet
+rm -f "$DMG_TMP"
 rm -rf "$DMG_STAGING"
 
 echo ""
