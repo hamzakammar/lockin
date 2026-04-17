@@ -47,9 +47,6 @@ jobs:
           VERSION: ${{ steps.version.outputs.VERSION }}
           SHA256: ${{ steps.sha.outputs.SHA256 }}
         run: |
-          git config --global credential.helper store
-          echo "https://hamzakammar:${TAP_TOKEN}@github.com" > ~/.git-credentials
-
           git clone https://github.com/hamzakammar/homebrew-tap.git /tmp/homebrew-tap
           cd /tmp/homebrew-tap
           git config user.email "ci@github.com"
@@ -60,4 +57,4 @@ jobs:
 
           git add Casks/lockin.rb
           git commit -m "chore: update lockin to v$VERSION"
-          git push
+          git push "https://hamzakammar:${TAP_TOKEN}@github.com/hamzakammar/homebrew-tap.git" main
