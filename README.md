@@ -2,6 +2,10 @@
 
 macOS menubar agent that watches your Sentience screen memories and yells at you when you're procrastinating.
 
+[![Download Latest](https://img.shields.io/github/v/release/hamzakammar/lockin?label=⬇%20Download&style=for-the-badge&color=black)](https://github.com/hamzakammar/lockin/releases/latest)
+
+> Requires macOS 13+, [Sentience](https://sentience.com) with screen capture enabled, and an API key.
+
 ## How It Works
 
 1. Every 2.5 minutes, polls `GET /v1/memories` on the Sentience API for the last 5 minutes of screen activity
