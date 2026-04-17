@@ -101,44 +101,55 @@ mkdir -p "$DMG_STAGING"
 mkdir -p "$BACKGROUND_DIR"
 
 # Generate a clean background image (dark gradient)
-BACKGROUND_DIR="$BACKGROUND_DIR" python3 - << 'PYEOF'
-import struct, zlib, os
+# Generate DMG background using osascript + Cocoa
+osascript << 'APPLESCRIPT_BG'
+use framework "AppKit"
+use framework "Foundation"
+use scripting additions
 
-def make_png(width, height, pixels_fn):
-    """Minimal PNG writer"""
-    def chunk(tag, data):
-        c = zlib.crc32(tag + data) & 0xffffffff
-        return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', c)
+set W to 540
+set H to 380
+set outPath to (system attribute "BACKGROUND_DIR") & "/bg.png"
 
-    rows = []
-    for y in range(height):
-        row = b'\x00'  # filter type None
-        for x in range(width):
-            row += bytes(pixels_fn(x, y, width, height))
-        rows.append(row)
+-- Create bitmap
+set bmp to current application's NSBitmapImageRep's alloc()'s initWithBitmapDataPlanes:(missing value) pixelsWide:W pixelsHigh:H bitsPerSample:8 samplesPerPixel:4 hasAlpha:true isPlanar:false colorSpaceName:(current application's NSCalibratedRGBColorSpace) bytesPerRow:0 bitsPerPixel:0
 
-    raw = b''.join(rows)
-    compressed = zlib.compress(raw, 9)
-    ihdr_data = struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)
-    png = b'\x89PNG\r\n\x1a\n'
-    png += chunk(b'IHDR', ihdr_data)
-    png += chunk(b'IDAT', compressed)
-    png += chunk(b'IEND', b'')
-    return png
+set ctx to current application's NSGraphicsContext's graphicsContextWithBitmapImageRep:bmp
+current application's NSGraphicsContext's setCurrentContext:ctx
 
-def bg_pixel(x, y, w, h):
-    # Dark gradient: top #1a1a2e → bottom #16213e
-    t = y / h
-    r = int(26  + (22  - 26)  * t)
-    g = int(26  + (33  - 26)  * t)
-    b = int(46  + (62  - 46)  * t)
-    return (r, g, b)
+-- White background
+set bgColor to current application's NSColor's colorWithRed:0.97 green:0.97 blue:0.97 alpha:1.0
+bgColor's setFill()
+current application's NSRectFill({x:0, y:0, |width|:W, |height|:H})
 
-png = make_png(540, 380, bg_pixel)
-with open(os.environ['BACKGROUND_DIR'] + '/bg.png', 'wb') as f:
-    f.write(png)
-print("Background generated")
-PYEOF
+-- Drag arrow (→) between app icon and Applications folder
+-- App icon center: x=160, Applications center: x=380, y=195 from bottom
+set arrowColor to current application's NSColor's colorWithRed:0.5 green:0.5 blue:0.5 alpha:0.8
+arrowColor's set()
+set arrowFont to current application's NSFont's systemFontOfSize:40
+set arrowAttrs to current application's NSDictionary's dictionaryWithObjects:{arrowFont, arrowColor} forKeys:{current application's NSFontAttributeName, current application's NSForegroundColorAttributeName}
+set arrowStr to current application's NSAttributedString's alloc()'s initWithString:"→" attributes:arrowAttrs
+set arrowSize to arrowStr's |size|()
+set arrowX to (W / 2) - ((arrowSize's |width|()) / 2)
+set arrowY to 175
+arrowStr's drawAtPoint:{arrowX, arrowY}
+
+-- Label: "Drag to install"
+set labelColor to current application's NSColor's colorWithRed:0.4 green:0.4 blue:0.4 alpha:1.0
+set labelFont to current application's NSFont's systemFontOfSize:12
+set labelAttrs to current application's NSDictionary's dictionaryWithObjects:{labelFont, labelColor} forKeys:{current application's NSFontAttributeName, current application's NSForegroundColorAttributeName}
+set labelStr to current application's NSAttributedString's alloc()'s initWithString:"Drag to Applications to install" attributes:labelAttrs
+set labelSize to labelStr's |size|()
+set labelX to (W / 2) - ((labelSize's |width|()) / 2)
+labelStr's drawAtPoint:{labelX, 140}
+
+ctx's flushGraphics()
+
+-- Save as PNG
+set pngData to bmp's representationUsingType:(current application's NSBitmapImageFileTypePNG) |properties|:(missing value)
+pngData's writeToFile:(outPath) atomically:true
+APPLESCRIPT_BG
+echo "Background generated" 
 
 # Create a writable DMG, set layout with AppleScript, then convert to compressed
 hdiutil create -size 80m -fs HFS+ -volname "$APP_NAME" "$DMG_TMP" -quiet
