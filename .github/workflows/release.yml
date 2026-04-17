@@ -3,7 +3,10 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'  # triggers on v1.0.0, v1.2.3, etc.
+      - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
   build-and-release:
