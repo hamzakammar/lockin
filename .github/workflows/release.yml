@@ -43,11 +43,14 @@ jobs:
 
       - name: Update Homebrew tap
         env:
-          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
           VERSION: ${{ steps.version.outputs.VERSION }}
           SHA256: ${{ steps.sha.outputs.SHA256 }}
         run: |
-          gh repo clone hamzakammar/homebrew-tap /tmp/homebrew-tap
+          git config --global credential.helper store
+          echo "https://hamzakammar:${TAP_TOKEN}@github.com" > ~/.git-credentials
+
+          git clone https://github.com/hamzakammar/homebrew-tap.git /tmp/homebrew-tap
           cd /tmp/homebrew-tap
           git config user.email "ci@github.com"
           git config user.name "GitHub Actions"
@@ -57,4 +60,4 @@ jobs:
 
           git add Casks/lockin.rb
           git commit -m "chore: update lockin to v$VERSION"
-          gh repo sync hamzakammar/homebrew-tap --source /tmp/homebrew-tap || git push
+          git push
