@@ -114,10 +114,9 @@ actor SentienceAPI {
             }
         }
 
-        let fresh = all.filter { !seenIds.contains($0.dedupKey) }
-        fresh.forEach { seenIds.insert($0.dedupKey) }
-        if seenIds.count > 500 { seenIds = Set(seenIds.dropFirst(seenIds.count - 500)) }
-        return fresh
+        // Return ALL memories in window for detection — no dedup.
+        // Detection needs to know what's happening right now, not just new events.
+        return all
     }
 
     func resetSeen() { seenIds = [] }
