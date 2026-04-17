@@ -85,7 +85,6 @@ fi
 # ── 5. Ad-hoc code sign ──
 echo "🔏 Signing..."
 codesign --force --deep --sign - \
-  --entitlements /dev/null \
   --options runtime \
   "$APP_DIR"
 echo "✅ Signed (ad-hoc)"
