@@ -696,23 +696,26 @@ class LockInMonitor: NSObject {
     private func handleProcrastination(app: String) async {
         switch state {
         case .focused:
+            // First detection — start the count, flip icon immediately
             state = .procrastinating(count: 1, since: Date(), app: app)
+            setIcon(.procrastinating)
+            statusMenuItem?.title = "Procrastinating on \(app) 🔴"
             await logger.log("Procrastination detected: \(app) (1)")
 
         case .procrastinating(let n, let since, _):
             let newN = n + 1
             state = .procrastinating(count: newN, since: since, app: app)
-            await logger.log("Procrastination: \(app) (\(newN))")
-            let mins = Int(Date().timeIntervalSince(since) / 60)
+            let mins = max(1, Int(Date().timeIntervalSince(since) / 60))
             let threshold = Settings.shared.threshold
+            await logger.log("Procrastination: \(app) (\(newN)) ~\(mins)min")
 
+            // First alert fires after `threshold` consecutive bad polls
             if newN == threshold {
                 await notifier.send(title: "🔴 Lock In",
-                                    body: countdownSuffix("You've been on \(app) for ~\(max(1,mins)) min. Lock in."))
-                setIcon(.procrastinating)
-                statusMenuItem?.title = "Procrastinating on \(app) 🔴"
+                                    body: countdownSuffix("You've been on \(app) for ~\(mins) min. Lock in."))
                 await logger.log("ALERT L1: \(app)")
             } else if newN > threshold, (newN - threshold) % 2 == 0 {
+                // Escalate every 2 polls after threshold
                 let lvl = (newN - threshold) / 2 + 1
                 let (t, b) = escalation(app: app, mins: mins, level: lvl)
                 await notifier.send(title: t, body: b, force: true)
